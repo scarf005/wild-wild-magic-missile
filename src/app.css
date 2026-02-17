@@ -210,6 +210,16 @@
   letter-spacing: 0.06em;
 }
 
+.survivor-debug-stat {
+  color: #ffd8b4;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border: 1px solid rgba(249, 192, 142, 0.46);
+  background: rgba(12, 8, 6, 0.64);
+  padding: 0.3rem 0.38rem;
+}
+
 .survivor-debug-row input[type="range"] {
   width: 100%;
 }
@@ -279,30 +289,48 @@
 .survivor-perk-card {
   text-align: left;
   border: 2px solid #8b8567;
-  background: rgba(18, 12, 9, 0.95);
+  background:
+    linear-gradient(165deg, rgba(66, 41, 27, 0.46), transparent 58%),
+    linear-gradient(180deg, rgba(16, 11, 9, 0.98), rgba(12, 8, 6, 0.96));
   color: #ffe2c5;
-  padding: 0.62rem;
+  padding: 0.72rem;
   display: grid;
-  gap: 0.42rem;
+  gap: 0.46rem;
   cursor: pointer;
-  transition: transform 100ms linear, filter 100ms linear, border-color 100ms linear;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.28), inset 0 0 0 1px rgba(255, 211, 175, 0.08);
+  transition: transform 100ms linear, filter 100ms linear, border-color 100ms linear, box-shadow 100ms linear;
 }
 
 .survivor-perk-card:hover {
-  transform: translateY(-1px);
+  transform: translateY(-1px) scale(1.01);
   filter: brightness(1.08);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.34), inset 0 0 0 1px rgba(255, 211, 175, 0.14);
 }
 
 .survivor-perk-card.selected {
-  box-shadow: 0 0 0 1px rgba(255, 223, 196, 0.22) inset;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.36), inset 0 0 0 1px rgba(255, 223, 196, 0.28);
   filter: brightness(1.15);
 }
 
+.survivor-perk-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.4rem;
+}
+
 .survivor-perk-school {
-  color: #d8b28e;
+  color: #f0bc8f;
   font-size: 0.58rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+}
+
+.survivor-perk-progress {
+  color: #ccad8e;
+  font-size: 0.54rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
 .survivor-perk-label {
@@ -316,7 +344,7 @@
 .survivor-perk-summary,
 .survivor-perk-hint {
   color: #e8c7a9;
-  font-size: 0.66rem;
+  font-size: 0.64rem;
   line-height: 1.35;
 }
 
@@ -342,7 +370,7 @@
 }
 
 .survivor-perk-hint {
-  color: #ffbb7d;
+  color: #ffcb9a;
 }
 
 .survivor-skip-button {

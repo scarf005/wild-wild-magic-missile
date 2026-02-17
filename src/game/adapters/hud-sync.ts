@@ -1,6 +1,7 @@
 import {
   coverageSlicesSignal,
   crosshairSignal,
+  enemyCountSignal,
   fpsSignal,
   hpSignal,
   levelUpChoicesSignal,
@@ -265,6 +266,7 @@ const syncRenderPathProfileSignal = (world: WorldState) => {
 export const resetHudSignals = (world: WorldState, canvas: HTMLCanvasElement) => {
   timeRemainingSignal.value = MATCH_DURATION_SECONDS
   fpsSignal.value = 0
+  enemyCountSignal.value = countHostileUnits(world)
   pausedSignal.value = false
   coverageSlicesSignal.value = buildCoverageSlices(world)
   matchResultSignal.value = defaultMatchResult
@@ -383,6 +385,17 @@ const updateSecondaryCooldownSignal = (world: WorldState) => {
   secondaryWeaponCooldownSignal.value = nextValue
 }
 
+const countHostileUnits = (world: WorldState) => {
+  let count = 0
+  for (const unit of world.units) {
+    if (unit.id === world.player.id || unit.team === world.player.team || unit.hp <= 0) {
+      continue
+    }
+    count += 1
+  }
+  return count
+}
+
 export const syncHudSignals = (world: WorldState) => {
   if (Math.abs(timeRemainingSignal.value - world.timeRemaining) >= 0.05) {
     timeRemainingSignal.value = world.timeRemaining
@@ -400,6 +413,10 @@ export const syncHudSignals = (world: WorldState) => {
   updatePlayerWeaponSignals(world)
   updateSecondaryCooldownSignal(world)
   updatePlayerPerkSignals(world)
+  const nextEnemyCount = countHostileUnits(world)
+  if (enemyCountSignal.value !== nextEnemyCount) {
+    enemyCountSignal.value = nextEnemyCount
+  }
   syncRenderPathProfileSignal(world)
 }
 

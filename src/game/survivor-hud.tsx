@@ -2,6 +2,7 @@ import {
   debugGameSpeedSignal,
   debugInfiniteHpSignal,
   debugInfiniteReloadSignal,
+  enemyCountSignal,
   fpsSignal,
   hpSignal,
   levelUpChoicesSignal,
@@ -13,19 +14,10 @@ import {
   timeRemainingSignal,
   xpSignal,
 } from "./signals.ts"
-import type { PerkId } from "./types.ts"
 import { getItemSpritePath } from "./render/pixel-art.ts"
 
-type MagicSchool = "pyrogenics" | "neutral"
-
-const PERK_SCHOOL: Partial<Record<PerkId, MagicSchool>> = {
-  proximity_grenades: "pyrogenics",
-  overpressure_rounds: "pyrogenics",
-  heavy_pellets: "pyrogenics",
-}
-
-const schoolColor = (perkId: PerkId) => {
-  return PERK_SCHOOL[perkId] === "pyrogenics" ? "#c1324c" : "#8b8567"
+const schoolColor = (school: "pyrogenics" | "neutral") => {
+  return school === "pyrogenics" ? "#c1324c" : "#8b8567"
 }
 
 const formatTime = (seconds: number) => {
@@ -81,6 +73,7 @@ export const SurvivorHud = () => {
       </div>
 
       <div class="survivor-debug-panel">
+        <div class="survivor-debug-stat">Enemies {enemyCountSignal.value}</div>
         <label class="survivor-debug-row">
           <input
             type="checkbox"
@@ -128,7 +121,7 @@ export const SurvivorHud = () => {
                 <button
                   key={choice.perkId}
                   class={`survivor-perk-card ${levelUpSelection === choice.perkId ? "selected" : ""}`}
-                  style={{ borderColor: schoolColor(choice.perkId) }}
+                  style={{ borderColor: schoolColor(choice.school) }}
                   onClick={() => {
                     levelUpSelectionSignal.value = choice.perkId
                   }}
@@ -138,14 +131,15 @@ export const SurvivorHud = () => {
                       ? <img src={getItemSpritePath(choice.icon)} class="survivor-perk-icon" alt="" />
                       : <span class="survivor-perk-icon-fallback">{choice.label.slice(0, 2).toUpperCase()}</span>}
                   </div>
-                  <div class="survivor-perk-school">
-                    {PERK_SCHOOL[choice.perkId] === "pyrogenics" ? "Pyrogenics" : "Neutral"}
+                  <div class="survivor-perk-header">
+                    <div class="survivor-perk-school">{choice.school === "pyrogenics" ? "Pyrogenics" : "Neutral"}</div>
+                    <div class="survivor-perk-progress">
+                      {choice.stacks > 0 ? `Upgrade ${choice.stacks}/${choice.maxStacks}` : `New perk 0/${choice.maxStacks}`}
+                    </div>
                   </div>
                   <div class="survivor-perk-label">{choice.label}</div>
-                  <div class="survivor-perk-summary">
-                    {choice.stacks > 0 ? `Upgrade ${choice.stacks}/${choice.maxStacks}` : `New perk 0/${choice.maxStacks}`}
-                  </div>
                   <div class="survivor-perk-summary">{choice.detail}</div>
+                  <div class="survivor-perk-hint">{choice.hint}</div>
                 </button>
               ))}
             </div>

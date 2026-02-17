@@ -1,5 +1,125 @@
 import { buildPerkCardView, type SurvivorModeDefinition } from "./schema.ts"
 
+interface SurvivorPressureCurvePoint {
+  atMinute: number
+  targetRatio: number
+  spawnIntervalSeconds: number
+  spawnBatch: number
+}
+
+interface SurvivorPressureSpikeWindow {
+  startMinute: number
+  durationSeconds: number
+  targetRatioBonus: number
+  spawnBatchBonus: number
+  intervalScale: number
+}
+
+export interface SurvivorPressureDirectorSample {
+  activeBotTarget: number
+  spawnIntervalSeconds: number
+  spawnBatch: number
+}
+
+const SURVIVOR_PRESSURE_CURVE: SurvivorPressureCurvePoint[] = [
+  { atMinute: 0, targetRatio: 0.18, spawnIntervalSeconds: 7.8, spawnBatch: 1 },
+  { atMinute: 2, targetRatio: 0.32, spawnIntervalSeconds: 6.2, spawnBatch: 1 },
+  { atMinute: 4, targetRatio: 0.48, spawnIntervalSeconds: 5.1, spawnBatch: 2 },
+  { atMinute: 7, targetRatio: 0.62, spawnIntervalSeconds: 4.2, spawnBatch: 2 },
+  { atMinute: 10, targetRatio: 0.78, spawnIntervalSeconds: 3.4, spawnBatch: 3 },
+  { atMinute: 14, targetRatio: 0.91, spawnIntervalSeconds: 2.8, spawnBatch: 3 },
+  { atMinute: 18, targetRatio: 1, spawnIntervalSeconds: 2.4, spawnBatch: 4 },
+]
+
+const SURVIVOR_PRESSURE_SPIKES: SurvivorPressureSpikeWindow[] = [
+  { startMinute: 1.5, durationSeconds: 20, targetRatioBonus: 0.08, spawnBatchBonus: 1, intervalScale: 0.72 },
+  { startMinute: 5.5, durationSeconds: 24, targetRatioBonus: 0.1, spawnBatchBonus: 1, intervalScale: 0.66 },
+  { startMinute: 9.5, durationSeconds: 28, targetRatioBonus: 0.12, spawnBatchBonus: 2, intervalScale: 0.58 },
+  { startMinute: 13.5, durationSeconds: 32, targetRatioBonus: 0.14, spawnBatchBonus: 2, intervalScale: 0.52 },
+  { startMinute: 17.5, durationSeconds: 36, targetRatioBonus: 0.18, spawnBatchBonus: 2, intervalScale: 0.46 },
+]
+
+const clamp = (value: number, min: number, max: number) => {
+  return Math.min(max, Math.max(min, value))
+}
+
+const lerp = (from: number, to: number, t: number) => {
+  return from + (to - from) * t
+}
+
+const samplePressureCurve = (elapsedSeconds: number) => {
+  const elapsedMinutes = Math.max(0, elapsedSeconds) / 60
+
+  let previous = SURVIVOR_PRESSURE_CURVE[0]
+  for (let index = 1; index < SURVIVOR_PRESSURE_CURVE.length; index += 1) {
+    const current = SURVIVOR_PRESSURE_CURVE[index]
+    if (elapsedMinutes <= current.atMinute) {
+      const span = Math.max(0.0001, current.atMinute - previous.atMinute)
+      const t = clamp((elapsedMinutes - previous.atMinute) / span, 0, 1)
+      return {
+        targetRatio: lerp(previous.targetRatio, current.targetRatio, t),
+        spawnIntervalSeconds: lerp(previous.spawnIntervalSeconds, current.spawnIntervalSeconds, t),
+        spawnBatch: Math.round(lerp(previous.spawnBatch, current.spawnBatch, t)),
+      }
+    }
+    previous = current
+  }
+
+  return {
+    targetRatio: previous.targetRatio,
+    spawnIntervalSeconds: previous.spawnIntervalSeconds,
+    spawnBatch: previous.spawnBatch,
+  }
+}
+
+const samplePressureSpike = (elapsedSeconds: number) => {
+  for (const spike of SURVIVOR_PRESSURE_SPIKES) {
+    const start = spike.startMinute * 60
+    const end = start + spike.durationSeconds
+    if (elapsedSeconds < start || elapsedSeconds >= end) {
+      continue
+    }
+    return spike
+  }
+
+  return null
+}
+
+export const sampleSurvivorPressureDirector = (
+  elapsedSeconds: number,
+  maxActiveBots: number,
+): SurvivorPressureDirectorSample => {
+  const curve = samplePressureCurve(elapsedSeconds)
+  const spike = samplePressureSpike(elapsedSeconds)
+
+  const ratio = clamp(
+    curve.targetRatio + (spike?.targetRatioBonus ?? 0),
+    0,
+    1,
+  )
+  const activeBotTarget = clamp(
+    Math.round(maxActiveBots * ratio),
+    1,
+    Math.max(1, maxActiveBots),
+  )
+  const spawnIntervalSeconds = clamp(
+    curve.spawnIntervalSeconds * (spike?.intervalScale ?? 1),
+    0.6,
+    12,
+  )
+  const spawnBatch = clamp(
+    curve.spawnBatch + (spike?.spawnBatchBonus ?? 0),
+    1,
+    8,
+  )
+
+  return {
+    activeBotTarget,
+    spawnIntervalSeconds,
+    spawnBatch,
+  }
+}
+
 export const SURVIVOR_MODE_DEFINITION: SurvivorModeDefinition = {
   title: "Wild Wild Magic Missile",
   coreLoop: [
@@ -174,7 +294,7 @@ export const SURVIVOR_MODE_DEFINITION: SurvivorModeDefinition = {
       species: "spider",
       role: "controller",
       baseHp: 180,
-      moveSpeed: 2.4,
+      moveSpeed: 1.6,
       threatNotes: ["Leap attack", "Web zone slows movement"],
     },
     {

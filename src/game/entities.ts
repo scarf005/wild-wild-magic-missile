@@ -1,4 +1,4 @@
-import type { AIState, PerkId, PrimaryWeaponId, SecondaryMode, Team } from "./types.ts"
+import type { AIState, PerkId, PrimaryWeaponId, SecondaryMode, SurvivorEnemyArchetype, Team } from "./types.ts"
 import { UNIT_BASE_HP } from "./world/constants.ts"
 
 export interface PrimaryWeaponSlot {
@@ -118,6 +118,7 @@ export class Unit {
   burstSpread = 0
   burstInterval = 0
   burstWeaponId: PrimaryWeaponId | null = null
+  survivorArchetype: SurvivorEnemyArchetype = "none"
 
   constructor(id: string, isPlayer: boolean, team: Team) {
     this.id = id
@@ -266,6 +267,7 @@ export class Pickup {
   throwDamageArmed = false
   radius = 16
   bob = 0
+  rotation = 0
 }
 
 export class MolotovZone {

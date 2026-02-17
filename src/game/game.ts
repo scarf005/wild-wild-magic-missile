@@ -88,6 +88,10 @@ import { updateAI } from "./systems/ai.ts"
 import { Flower, type Unit } from "./entities.ts"
 import { HIGH_TIER_PRIMARY_IDS, PRIMARY_WEAPONS } from "./weapons.ts"
 import { applyPerkToUnit, PERK_CONFIGS, PERK_POOL, perkStacks } from "./perks.ts"
+import { sampleSurvivorPressureDirector, SURVIVOR_MODE_DEFINITION } from "./survivor/config.ts"
+import { createSurvivorCombatHookQueue, type SurvivorCombatHookInput } from "./survivor/combat-hooks.ts"
+import { createSurvivorStatusEngine } from "./survivor/status-engine.ts"
+import { createSurvivorPerkTriggerResolver } from "./survivor/trigger-resolver.ts"
 import {
   botPalette,
   BURNED_FACTION_COLOR,
@@ -128,13 +132,24 @@ const SURVIVOR_MATCH_DURATION_SECONDS = 20 * 60
 const SURVIVOR_MIN_PLAYERS = 16
 const SURVIVOR_MAX_PLAYERS = 72
 const SURVIVOR_INITIAL_PLAYERS = 10
-const SURVIVOR_SWARM_RAMP_INTERVAL_START_SECONDS = 8
-const SURVIVOR_SWARM_RAMP_INTERVAL_END_SECONDS = 2.6
 const SURVIVOR_CONTACT_DAMAGE_PER_SECOND = 3.2
 const SURVIVOR_PLAYER_TEAM = "arcanist"
 const SURVIVOR_SWARM_TEAM = "swarm"
 const SURVIVOR_BASE_XP_TO_LEVEL = 12
 const SURVIVOR_XP_GROWTH = 1.14
+const SURVIVOR_MOSQUITO_ARCHETYPE = "mosquito_swarmer"
+const SURVIVOR_SPIDER_ARCHETYPE = "giant_spider"
+const SURVIVOR_ENEMY_BY_ID = new Map(SURVIVOR_MODE_DEFINITION.enemies.map((enemy) => [enemy.id, enemy]))
+
+const parseBotIndex = (botId: string) => {
+  const parsed = Number(botId.replace("bot-", ""))
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+const pickSurvivorArchetype = (bot: Unit) => {
+  const botIndex = Math.max(1, parseBotIndex(bot.id))
+  return botIndex % 7 === 0 ? SURVIVOR_SPIDER_ARCHETYPE : SURVIVOR_MOSQUITO_ARCHETYPE
+}
 
 type FogCullBounds = CullBounds
 
@@ -160,7 +175,10 @@ export class FlowerArenaGame {
   private survivorNextLevelXp = SURVIVOR_BASE_XP_TO_LEVEL
   private survivorPendingLevelChoices = 0
   private survivorTargetBotCount = 0
-  private survivorSwarmRampTimer = SURVIVOR_SWARM_RAMP_INTERVAL_START_SECONDS
+  private survivorSwarmRampTimer = sampleSurvivorPressureDirector(0, SURVIVOR_MAX_PLAYERS).spawnIntervalSeconds
+  private survivorCombatHooks = createSurvivorCombatHookQueue()
+  private survivorStatusEngine = createSurvivorStatusEngine()
+  private survivorTriggerResolver = createSurvivorPerkTriggerResolver()
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas
@@ -317,7 +335,7 @@ export class FlowerArenaGame {
 
       this.currentMode = mode
       this.survivorTargetBotCount = targetBotCount
-      this.survivorSwarmRampTimer = SURVIVOR_SWARM_RAMP_INTERVAL_START_SECONDS
+      this.survivorSwarmRampTimer = sampleSurvivorPressureDirector(0, targetBotCount).spawnIntervalSeconds
       ffaPlayerCountSignal.value = targetBotCount + 1
 
       this.world.bots = activeBots
@@ -325,8 +343,10 @@ export class FlowerArenaGame {
       rebuildUnitLookup(this.world)
 
       this.world.player.team = SURVIVOR_PLAYER_TEAM
+      this.world.player.survivorArchetype = "none"
       for (const bot of activeBots) {
         bot.team = SURVIVOR_SWARM_TEAM
+        bot.survivorArchetype = "none"
       }
 
       const factions: FactionDescriptor[] = [
@@ -378,6 +398,7 @@ export class FlowerArenaGame {
       for (let index = 0; index < activeBots.length; index += 1) {
         const bot = activeBots[index]
         bot.team = bot.id
+        bot.survivorArchetype = "none"
         factions.push({
           id: bot.id,
           label: t`Bot ${index + 1}`,
@@ -390,6 +411,7 @@ export class FlowerArenaGame {
       this.world.player.team = "red"
       for (let index = 0; index < activeBots.length; index += 1) {
         activeBots[index].team = index < redBotCount ? "red" : "blue"
+        activeBots[index].survivorArchetype = "none"
       }
 
       factions = [
@@ -405,6 +427,7 @@ export class FlowerArenaGame {
       for (let index = 0; index < units.length; index += 1) {
         const teamIndex = Math.min(teamIds.length - 1, Math.floor(index / teamSize))
         units[index].team = teamIds[teamIndex]
+        units[index].survivorArchetype = "none"
       }
 
       factions = teamIds.map((teamId, index) => ({
@@ -586,6 +609,42 @@ export class FlowerArenaGame {
     return t`Damage taken -1 (min 1)`
   }
 
+  private localizePerkHint(perkId: PerkId) {
+    if (perkId === "laser_sight") {
+      return t`Best with rifles and pressure rounds for stable crit chains`
+    }
+    if (perkId === "ricochet_shells") {
+      return t`Pairs with heavy pellets to sweep clustered swarm lines`
+    }
+    if (perkId === "proximity_grenades") {
+      return t`Great opener for pyrogenic combo loops in dense packs`
+    }
+    if (perkId === "rapid_reload") {
+      return t`Sustains tempo while juggling high recoil perk stacks`
+    }
+    if (perkId === "heavy_pellets") {
+      return t`Use with ricochet or overpressure for chain burst clears`
+    }
+    if (perkId === "extra_heart") {
+      return t`Safety pick while scaling into late-wave pyrogenics`
+    }
+    if (perkId === "overpressure_rounds") {
+      return t`Amplifies all hit-trigger perks; offset cadence with reload perks`
+    }
+    if (perkId === "extra_stamina") {
+      return t`Kite swarms wider to buy room for projectile chaining`
+    }
+
+    return t`Frontline anchor while stacking offensive chain perks`
+  }
+
+  private perkSchool(perkId: PerkId): "pyrogenics" | "neutral" {
+    if (perkId === "proximity_grenades" || perkId === "heavy_pellets" || perkId === "overpressure_rounds") {
+      return "pyrogenics"
+    }
+    return "neutral"
+  }
+
   private randomLootablePrimaryForMatch() {
     if (this.canSpawnFlamethrower()) {
       return randomLootablePrimary()
@@ -690,6 +749,8 @@ export class FlowerArenaGame {
         perkId,
         label: this.localizePerk(perkId),
         detail: this.localizePerkDetail(perkId, Math.max(1, stacks + 1)),
+        hint: this.localizePerkHint(perkId),
+        school: this.perkSchool(perkId),
         icon: perkId,
         stacks,
         maxStacks: config.maxStacks,
@@ -759,14 +820,26 @@ export class FlowerArenaGame {
   }
 
   private configureSurvivorSwarmBot(bot: Unit) {
+    const archetype = pickSurvivorArchetype(bot)
+    const definition = SURVIVOR_ENEMY_BY_ID.get(archetype)
+    const mosquitoMoveSpeed = SURVIVOR_ENEMY_BY_ID.get(SURVIVOR_MOSQUITO_ARCHETYPE)?.moveSpeed ?? 5
+    const mosquitoBaseHp = SURVIVOR_ENEMY_BY_ID.get(SURVIVOR_MOSQUITO_ARCHETYPE)?.baseHp ?? 24
+    const hpScale = definition ? definition.baseHp / mosquitoBaseHp : 1
+    const speedScale = definition ? definition.moveSpeed / mosquitoMoveSpeed : 1
+
     bot.team = SURVIVOR_SWARM_TEAM
-    bot.maxHp = Math.max(4, Math.round(UNIT_BASE_HP * 0.6))
+    bot.survivorArchetype = archetype
+    bot.maxHp = archetype === SURVIVOR_SPIDER_ARCHETYPE
+      ? clamp(Math.round(UNIT_BASE_HP * hpScale * 0.8), 12, 20)
+      : clamp(Math.round(UNIT_BASE_HP * hpScale * 0.5), 4, 8)
     bot.hp = bot.maxHp
-    bot.radius = BOT_RADIUS * 0.86
-    bot.damageMultiplier = 1
-    bot.fireRateMultiplier = 1
+    bot.radius = archetype === SURVIVOR_SPIDER_ARCHETYPE ? BOT_RADIUS * 1.3 : BOT_RADIUS * 0.72
+    bot.damageMultiplier = archetype === SURVIVOR_SPIDER_ARCHETYPE ? 1.2 : 0.88
+    bot.fireRateMultiplier = archetype === SURVIVOR_SPIDER_ARCHETYPE ? 0.8 : 1.08
     bot.bulletSizeMultiplier = 1
-    bot.speed = BOT_BASE_SPEED * 0.82
+    bot.speed = archetype === SURVIVOR_SPIDER_ARCHETYPE
+      ? BOT_BASE_SPEED * clamp(speedScale * 0.65, 0.42, 0.72)
+      : BOT_BASE_SPEED * clamp(speedScale * 0.98, 0.9, 1.14)
     bot.grenadeTimer = 1
     bot.reloadSpeedMultiplier = 1
     bot.damageTakenMultiplier = 1
@@ -799,20 +872,18 @@ export class FlowerArenaGame {
       return
     }
 
-    const remaining = this.survivorTargetBotCount - this.world.bots.length
-    if (remaining <= 0) {
-      return
-    }
+    const elapsedSeconds = SURVIVOR_MATCH_DURATION_SECONDS - this.world.timeRemaining
+    const director = sampleSurvivorPressureDirector(elapsedSeconds, this.survivorTargetBotCount)
 
     this.survivorSwarmRampTimer -= dt
     if (this.survivorSwarmRampTimer > 0) {
       return
     }
 
-    const elapsed = SURVIVOR_MATCH_DURATION_SECONDS - this.world.timeRemaining
-    const progress = clamp(elapsed / SURVIVOR_MATCH_DURATION_SECONDS, 0, 1)
-    const spawnBatch = progress >= 0.72 ? 3 : progress >= 0.34 ? 2 : 1
-    const spawnCount = Math.min(remaining, spawnBatch)
+    const remaining = this.survivorTargetBotCount - this.world.bots.length
+    const desired = Math.min(director.activeBotTarget, this.survivorTargetBotCount)
+    const needed = Math.max(0, desired - this.world.bots.length)
+    const spawnCount = Math.min(remaining, needed, director.spawnBatch)
 
     for (let index = 0; index < spawnCount; index += 1) {
       const nextBot = this.botPool[this.world.bots.length]
@@ -822,11 +893,7 @@ export class FlowerArenaGame {
       this.activateSurvivorSwarmBot(nextBot)
     }
 
-    this.survivorSwarmRampTimer = lerp(
-      SURVIVOR_SWARM_RAMP_INTERVAL_START_SECONDS,
-      SURVIVOR_SWARM_RAMP_INTERVAL_END_SECONDS,
-      progress,
-    )
+    this.survivorSwarmRampTimer = director.spawnIntervalSeconds
   }
 
   private applySurvivorContactDamage(dt: number) {
@@ -842,7 +909,7 @@ export class FlowerArenaGame {
 
       const hitRadius = bot.radius + this.world.player.radius
       if (distSquared(bot.position.x, bot.position.y, this.world.player.position.x, this.world.player.position.y) <= hitRadius * hitRadius) {
-        attackers += 1
+        attackers += bot.survivorArchetype === SURVIVOR_SPIDER_ARCHETYPE ? 1.8 : 1
       }
     }
 
@@ -852,6 +919,179 @@ export class FlowerArenaGame {
 
     const pressure = Math.min(8, attackers)
     this.world.player.hp = Math.max(0, this.world.player.hp - SURVIVOR_CONTACT_DAMAGE_PER_SECOND * pressure * dt)
+  }
+
+  private enqueueSurvivorCombatHook(event: SurvivorCombatHookInput) {
+    if (this.currentMode !== "survivor") {
+      return
+    }
+    this.survivorCombatHooks.enqueue(event)
+  }
+
+  private applySurvivorIgnite(
+    targetId: string,
+    sourceId: string,
+    sourceTeam: Team,
+    stacks: number,
+    chainDepth: number,
+    x: number,
+    y: number,
+  ) {
+    if (this.currentMode !== "survivor") {
+      return
+    }
+
+    const result = this.survivorStatusEngine.applyBurning(targetId, stacks, sourceId, sourceTeam)
+    if (result.stacksApplied <= 0) {
+      return
+    }
+    this.survivorStatusEngine.applyScorch(targetId, 1)
+
+    if (result.ignited) {
+      this.enqueueSurvivorCombatHook({
+        type: "onIgnite",
+        sourceId,
+        sourceTeam,
+        targetId,
+        stacksApplied: result.stacksApplied,
+        x,
+        y,
+        chainDepth,
+      })
+    }
+  }
+
+  private igniteNearestSurvivorEnemies(
+    x: number,
+    y: number,
+    sourceId: string,
+    sourceTeam: Team,
+    chainDepth: number,
+    count: number,
+    stacks: number,
+  ) {
+    if (this.currentMode !== "survivor") {
+      return 0
+    }
+
+    const candidates = this.world.units
+      .filter((unit) => !unit.isPlayer && unit.hp > 0)
+      .map((unit) => ({
+        unit,
+        distance: distSquared(unit.position.x, unit.position.y, x, y),
+      }))
+      .sort((left, right) => {
+        if (left.distance !== right.distance) {
+          return left.distance - right.distance
+        }
+        return left.unit.id.localeCompare(right.unit.id)
+      })
+
+    const limit = Math.max(0, Math.floor(count))
+    let ignited = 0
+    for (const candidate of candidates) {
+      if (ignited >= limit) {
+        break
+      }
+      this.applySurvivorIgnite(
+        candidate.unit.id,
+        sourceId,
+        sourceTeam,
+        stacks,
+        chainDepth,
+        candidate.unit.position.x,
+        candidate.unit.position.y,
+      )
+      ignited += 1
+    }
+
+    return ignited
+  }
+
+  private triggerSurvivorMicroExplosion(
+    x: number,
+    y: number,
+    sourceId: string,
+    sourceTeam: Team,
+    chainDepth: number,
+    scale: number,
+  ) {
+    if (this.currentMode !== "survivor") {
+      return
+    }
+
+    const radius = 2.2 * Math.max(0.4, scale)
+    const nearestEnemy = this.world.units
+      .filter((unit) => !unit.isPlayer && unit.hp > 0)
+      .map((unit) => ({
+        unit,
+        distance: distSquared(unit.position.x, unit.position.y, x, y),
+      }))
+      .sort((left, right) => {
+        if (left.distance !== right.distance) {
+          return left.distance - right.distance
+        }
+        return left.unit.id.localeCompare(right.unit.id)
+      })[0]?.unit
+    const scorchBonus = nearestEnemy ? this.survivorStatusEngine.consumeScorch(nearestEnemy.id) : 0
+    const damage = 2.8 * Math.max(0.4, scale) + scorchBonus * 0.7
+
+    this.spawnExplosion(x, y, radius)
+    this.applyRadialExplosionDamage(
+      x,
+      y,
+      radius,
+      damage,
+      sourceId,
+      sourceTeam,
+      true,
+      chainDepth,
+    )
+    this.damageObstaclesAtExplosion(x, y, radius)
+  }
+
+  private resolveSurvivorTriggerChains() {
+    if (this.currentMode !== "survivor") {
+      return
+    }
+
+    this.survivorTriggerResolver.resolvePending(this.survivorCombatHooks, {
+      playerId: this.world.player.id,
+      hasPerk: (perkId) => perkStacks(this.world.player, perkId) > 0,
+      triggerMicroExplosion: (x, y, sourceId, sourceTeam, chainDepth, scale) => {
+        this.triggerSurvivorMicroExplosion(x, y, sourceId, sourceTeam, chainDepth, scale)
+      },
+      igniteNearestEnemies: (x, y, sourceId, sourceTeam, chainDepth, count, stacks) => {
+        return this.igniteNearestSurvivorEnemies(x, y, sourceId, sourceTeam, chainDepth, count, stacks)
+      },
+    })
+  }
+
+  private updateSurvivorStatusEngine(dt: number) {
+    if (this.currentMode !== "survivor") {
+      return
+    }
+
+    this.survivorStatusEngine.syncUnits(this.world.units)
+    this.survivorStatusEngine.step(dt, {
+      onBurnTick: (event) => {
+        const target = this.getUnit(event.targetId)
+        if (!target || target.hp <= 0) {
+          return
+        }
+        this.applyDamage(
+          event.targetId,
+          event.damage,
+          event.sourceId,
+          event.sourceTeam,
+          target.position.x,
+          target.position.y,
+          0,
+          -1,
+          "other",
+        )
+      },
+    })
   }
 
   private setupInput() {
@@ -907,6 +1147,9 @@ export class FlowerArenaGame {
     this.world.playerDamageDealt = 0
     this.world.playerFlowerTotal = 0
     this.resetSurvivorProgress()
+    this.survivorCombatHooks.clear()
+    this.survivorStatusEngine.clearAll()
+    this.survivorTriggerResolver.reset()
     resetRenderPathProfile(this.world)
     this.world.impactFeelLevel = clamp(debugImpactFeelLevelSignal.value, 1, 2)
     this.world.terrainMap = createBarrenGardenMap(112)
@@ -917,6 +1160,7 @@ export class FlowerArenaGame {
     this.world.flowerDirtyCount = 0
 
     const player = this.world.player
+    player.survivorArchetype = "none"
     player.maxHp = UNIT_BASE_HP
     player.hp = UNIT_BASE_HP
     player.radius = PLAYER_RADIUS
@@ -947,6 +1191,7 @@ export class FlowerArenaGame {
       if (this.currentMode === "survivor") {
         this.configureSurvivorSwarmBot(bot)
       } else {
+        bot.survivorArchetype = "none"
         bot.maxHp = UNIT_BASE_HP
         bot.hp = UNIT_BASE_HP
         bot.radius = BOT_RADIUS
@@ -1064,6 +1309,10 @@ export class FlowerArenaGame {
     levelUpChoicesSignal.value = []
     levelUpSelectionSignal.value = null
     this.audioDirector.startMenu()
+
+    this.survivorCombatHooks.clear()
+    this.survivorStatusEngine.clearAll()
+    this.survivorTriggerResolver.reset()
 
     if (this.currentMode === "survivor") {
       const survivedSeconds = Math.max(0, Math.round(SURVIVOR_MATCH_DURATION_SECONDS - this.world.timeRemaining))
@@ -1816,8 +2065,10 @@ export class FlowerArenaGame {
     sourceId: string,
     sourceTeam: Team,
     useFalloff = false,
+    chainDepth = 0,
   ) {
     const radiusSq = radius * radius
+    let hits = 0
     for (const unit of this.world.units) {
       if (unit.team === sourceTeam && unit.id !== sourceId) {
         continue
@@ -1834,6 +2085,8 @@ export class FlowerArenaGame {
         ? Math.max(1, damage * (0.35 + falloff * 0.65))
         : damage
 
+      const hpBefore = unit.hp
+
       this.applyDamage(
         unit.id,
         resolvedDamage,
@@ -1845,7 +2098,25 @@ export class FlowerArenaGame {
         unit.position.y - y,
         "projectile",
       )
+      if (unit.hp < hpBefore) {
+        hits += 1
+      }
     }
+
+    if (this.currentMode === "survivor") {
+      this.enqueueSurvivorCombatHook({
+        type: "onExplosion",
+        sourceId,
+        sourceTeam,
+        x,
+        y,
+        radius,
+        hits,
+        chainDepth,
+      })
+    }
+
+    return hits
   }
 
   private damageObstaclesAtExplosion(x: number, y: number, radius: number) {
@@ -2087,6 +2358,9 @@ export class FlowerArenaGame {
     impactY: number,
     damageSource: "projectile" | "throwable" | "molotov" | "arena" | "other" = "other",
   ) {
+    const targetBefore = this.getUnit(targetId)
+    const hpBefore = targetBefore?.hp ?? 0
+
     applyDamage(this.world, targetId, amount, sourceId, sourceTeam, hitX, hitY, impactX, impactY, {
       allocPopup: () => this.allocPopup(),
       spawnFlowers: (ownerId, x, y, dirX, dirY, amountValue, sizeScale, isBurnt, options) => {
@@ -2113,11 +2387,25 @@ export class FlowerArenaGame {
       },
       onKillPetalBurst: (x, y) => this.spawnKillPetalBurst(x, y),
       onUnitKilled: (target, isSuicide, killer) => {
+        const statusBeforeDeath = this.survivorStatusEngine.snapshot(target.id)
         if (isSuicide || !killer) {
+          this.survivorStatusEngine.clearUnit(target.id)
           return
         }
 
         killer.matchKills += 1
+        this.enqueueSurvivorCombatHook({
+          type: "onKill",
+          sourceId: killer.id,
+          sourceTeam: killer.team,
+          targetId: target.id,
+          targetWasBurning: statusBeforeDeath.burningStacks > 0,
+          x: target.position.x,
+          y: target.position.y,
+          chainDepth: 0,
+        })
+
+        this.survivorStatusEngine.clearUnit(target.id)
         if (this.currentMode === "survivor") {
           if (!target.isPlayer && killer.isPlayer) {
             this.spawnSurvivorXpDropAt(target.position.x, target.position.y, target.maxHp)
@@ -2141,6 +2429,32 @@ export class FlowerArenaGame {
       onPlayerHpChanged: () => updatePlayerHpSignal(this.world),
       isInfiniteHpEnabled: () => debugInfiniteHpSignal.value,
     }, damageSource)
+
+    const targetAfter = this.getUnit(targetId)
+    const hpAfter = targetAfter?.hp ?? hpBefore
+    if (hpAfter < hpBefore) {
+      this.enqueueSurvivorCombatHook({
+        type: "onHit",
+        sourceId,
+        sourceTeam,
+        targetId,
+        damage: hpBefore - hpAfter,
+        damageSource,
+        x: hitX,
+        y: hitY,
+        chainDepth: 0,
+      })
+
+      const canIgnite = this.currentMode === "survivor" &&
+        damageSource !== "arena" &&
+        sourceId === this.world.player.id &&
+        targetAfter &&
+        !targetAfter.isPlayer &&
+        targetAfter.hp > 0
+      if (canIgnite) {
+        this.applySurvivorIgnite(targetId, sourceId, sourceTeam, 1, 0, hitX, hitY)
+      }
+    }
   }
 
   private loop = (time: number) => {
@@ -2353,9 +2667,21 @@ export class FlowerArenaGame {
         this.applyDamage(targetId, amount, sourceId, sourceTeam, hitX, hitY, impactX, impactY, "throwable")
       },
       explodeGrenade: (throwableIndex) => {
+        const throwable = this.world.throwables[throwableIndex]
+        const explosionX = throwable?.position.x ?? 0
+        const explosionY = throwable?.position.y ?? 0
+        const explosionRadius = 3.8 * Math.max(0.6, throwable?.explosiveRadiusMultiplier ?? 1)
+        const sourceId = throwable?.ownerId ?? this.world.player.id
+        const sourceTeam = throwable?.ownerTeam ?? this.world.player.team
+        let hits = 0
         explodeGrenade(this.world, throwableIndex, {
           applyDamage: (targetId, amount, sourceId, sourceTeam, hitX, hitY, impactX, impactY) => {
+            const target = this.getUnit(targetId)
+            const hpBefore = target?.hp ?? 0
             this.applyDamage(targetId, amount, sourceId, sourceTeam, hitX, hitY, impactX, impactY, "throwable")
+            if (target && target.hp < hpBefore) {
+              hits += 1
+            }
           },
           damageObstaclesByExplosion: (x, y, radius) => {
             damageObstaclesByExplosion(this.world, x, y, radius, {
@@ -2366,6 +2692,16 @@ export class FlowerArenaGame {
             })
           },
           spawnExplosion: (x, y, radius) => this.spawnExplosion(x, y, radius),
+        })
+        this.enqueueSurvivorCombatHook({
+          type: "onExplosion",
+          sourceId,
+          sourceTeam,
+          x: explosionX,
+          y: explosionY,
+          radius: explosionRadius,
+          hits,
+          chainDepth: 0,
         })
       },
       igniteMolotov: (throwableIndex) => {
@@ -2386,6 +2722,9 @@ export class FlowerArenaGame {
         this.applyDamage(targetId, amount, sourceId, sourceTeam, hitX, hitY, impactX, impactY, "molotov")
       },
     })
+
+    this.updateSurvivorStatusEngine(simDt)
+    this.resolveSurvivorTriggerChains()
 
     updateFlowers(this.world, effectDt)
     updateDamagePopups(this.world, effectDt)

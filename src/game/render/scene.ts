@@ -52,6 +52,7 @@ const FLOWER_SPRITE_PIXEL_SIZE = 16
 const GROUND_LAYER_PIXELS_PER_TILE = GRASS_TILE_PIXEL_SIZE
 const FLOWER_LAYER_PIXELS_PER_TILE = 12
 const FLOWER_LAYER_FLUSH_LIMIT = 1200
+const SURVIVOR_BLOOD_SPLAT_COLOR = "#a6bf45"
 const PRIMARY_RELOAD_RING_THICKNESS_WORLD = 2 / WORLD_SCALE
 const PRIMARY_RELOAD_RING_OFFSET_WORLD = 0.22
 const PRIMARY_RELOAD_RING_COLOR = "#ffffff"
@@ -840,30 +841,13 @@ const renderFlowers = (
       }
 
       const radius = Math.max(0.04, flower.size * 1.35)
-      const seed = hashKey(`${flower.slotIndex}:${flower.position.x.toFixed(2)}:${flower.position.y.toFixed(2)}`)
 
       context.save()
-      context.globalAlpha = alpha * 0.86
-      context.fillStyle = flower.color
+      context.globalAlpha = alpha * 0.8
+      context.fillStyle = SURVIVOR_BLOOD_SPLAT_COLOR
       context.beginPath()
       context.arc(flower.position.x, flower.position.y, radius, 0, Math.PI * 2)
       context.fill()
-
-      context.fillStyle = flower.accent
-      for (let blob = 0; blob < 2; blob += 1) {
-        const angle = ((seed + blob * 173) % 360) * (Math.PI / 180)
-        const offset = radius * (0.35 + blob * 0.18)
-        const blobRadius = radius * (0.35 - blob * 0.08)
-        context.beginPath()
-        context.arc(
-          flower.position.x + Math.cos(angle) * offset,
-          flower.position.y + Math.sin(angle) * offset,
-          Math.max(0.015, blobRadius),
-          0,
-          Math.PI * 2,
-        )
-        context.fill()
-      }
       context.restore()
     }
     return
@@ -907,11 +891,13 @@ const pickupGlowColor = (pickup: WorldState["pickups"][number]) => {
   return "255, 214, 104"
 }
 
-const drawXpCrystal = (context: CanvasRenderingContext2D, x: number, y: number, pulse: number) => {
-  const width = 0.2 + pulse * 0.06
-  const height = 0.34 + pulse * 0.08
+const drawXpCrystal = (context: CanvasRenderingContext2D, x: number, y: number, pulse: number, rotation: number) => {
+  const scale = 0.75
+  const width = (0.2 + pulse * 0.06) * scale
+  const height = (0.34 + pulse * 0.08) * scale
   context.save()
   context.translate(x, y)
+  context.rotate(rotation)
   context.fillStyle = "#8be0ff"
   context.beginPath()
   context.moveTo(0, -height)
@@ -963,18 +949,20 @@ const renderPickups = (
 
     const bobOffset = Math.sin(pickup.bob + dt * 4) * 0.14
     const pulse = 0.35 + (Math.sin(pickup.bob * 1.6) * 0.5 + 0.5) * 0.35
-    const glow = pickupGlowColor(pickup)
+    if (pickup.kind !== "xp") {
+      const glow = pickupGlowColor(pickup)
 
-    context.fillStyle = `rgba(${glow}, ${0.18 + pulse * 0.2})`
-    context.beginPath()
-    context.arc(pickup.position.x, pickup.position.y + bobOffset, 0.68 + pulse * 0.22, 0, Math.PI * 2)
-    context.fill()
+      context.fillStyle = `rgba(${glow}, ${0.18 + pulse * 0.2})`
+      context.beginPath()
+      context.arc(pickup.position.x, pickup.position.y + bobOffset, 0.68 + pulse * 0.22, 0, Math.PI * 2)
+      context.fill()
 
-    context.strokeStyle = `rgba(${glow}, ${0.28 + pulse * 0.35})`
-    context.lineWidth = 0.08
-    context.beginPath()
-    context.arc(pickup.position.x, pickup.position.y + bobOffset, 0.5 + pulse * 0.14, 0, Math.PI * 2)
-    context.stroke()
+      context.strokeStyle = `rgba(${glow}, ${0.28 + pulse * 0.35})`
+      context.lineWidth = 0.08
+      context.beginPath()
+      context.arc(pickup.position.x, pickup.position.y + bobOffset, 0.5 + pulse * 0.14, 0, Math.PI * 2)
+      context.stroke()
+    }
 
     context.fillStyle = "rgba(0, 0, 0, 0.2)"
     context.beginPath()
@@ -982,7 +970,7 @@ const renderPickups = (
     context.fill()
 
     if (pickup.kind === "xp") {
-      drawXpCrystal(context, pickup.position.x, pickup.position.y + bobOffset, pulse)
+      drawXpCrystal(context, pickup.position.x, pickup.position.y + bobOffset, pulse, pickup.rotation)
       continue
     }
 
@@ -1445,18 +1433,23 @@ const renderUnitStatusRings = (
 const renderUnits = (context: CanvasRenderingContext2D, world: WorldState, fogCullBounds: FogCullBounds) => {
   const isSurvivorMode = world.player.team === "arcanist"
   for (const unit of world.units) {
-    const isSurvivorSpider = isSurvivorMode && !unit.isPlayer && unit.team === "swarm"
-    const spiderScale = isSurvivorSpider ? 0.92 : 1
+    const isSurvivorSwarmEnemy = isSurvivorMode && !unit.isPlayer && unit.team === "swarm"
+    const isSurvivorSpider = isSurvivorSwarmEnemy && unit.survivorArchetype === "giant_spider"
+    const bodyScale = isSurvivorSwarmEnemy
+      ? isSurvivorSpider
+        ? 1.2
+        : 0.82
+      : 1
     const drawX = unit.position.x - unit.aim.x * unit.recoil * 0.32
     const drawY = unit.position.y - unit.aim.y * unit.recoil * 0.32
-    const body = unit.radius * 1.2 * spiderScale
-    const ear = unit.radius * 0.42 * spiderScale
+    const body = unit.radius * 1.2 * bodyScale
+    const ear = unit.radius * 0.42 * bodyScale
 
     if (!isInsideFogCullBounds(drawX, drawY, fogCullBounds, body * 2.8)) {
       continue
     }
 
-    if (!isSurvivorSpider) {
+    if (!isSurvivorSwarmEnemy) {
       renderUnitStatusRings(context, unit, drawX, drawY, body)
     }
 
@@ -1494,7 +1487,7 @@ const renderUnits = (context: CanvasRenderingContext2D, world: WorldState, fogCu
     context.fillStyle = tone
     context.fillRect(drawX - body * 0.68, drawY - body * 0.82, body * 1.36, body * 1.64)
 
-    if (!isSurvivorSpider) {
+    if (!isSurvivorSwarmEnemy) {
       const gunLength = unit.radius * 1.25 + unit.recoil * 0.24
       const weaponAngle = Math.atan2(unit.aim.y, unit.aim.x)
       const weaponScale = Math.max(0.09, unit.radius * 0.36)

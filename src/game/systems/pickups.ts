@@ -89,6 +89,7 @@ export const spawnPickupAt = (world: WorldState, position: { x: number; y: numbe
   }
   slot.radius = 0.8
   slot.bob = randomRange(0, Math.PI * 2)
+  slot.rotation = randomRange(0, Math.PI * 2)
   slot.perkId = null
   slot.xpValue = 0
   slot.velocity.set(0, 0)
@@ -116,6 +117,7 @@ export const spawnPerkPickupAt = (world: WorldState, position: { x: number; y: n
   slot.highTier = false
   slot.radius = 0.8
   slot.bob = randomRange(0, Math.PI * 2)
+  slot.rotation = randomRange(0, Math.PI * 2)
   slot.velocity.set(0, 0)
   slot.throwOwnerId = ""
   slot.throwOwnerTeam = "white"
@@ -142,6 +144,7 @@ export const spawnXpPickupAt = (world: WorldState, position: { x: number; y: num
   slot.highTier = false
   slot.radius = 0.55
   slot.bob = randomRange(0, Math.PI * 2)
+  slot.rotation = randomRange(0, Math.PI * 2)
   slot.velocity.set(0, 0)
   slot.throwOwnerId = ""
   slot.throwOwnerTeam = "white"
@@ -342,6 +345,7 @@ export const collectNearbyPickup = (world: WorldState, unit: Unit, deps: Collect
       pickup.throwOwnerTeam = unit.team
       pickup.throwDamageArmed = true
       pickup.bob = randomRange(0, Math.PI * 2)
+      pickup.rotation = randomRange(0, Math.PI * 2)
       pickup.xpValue = 0
     } else {
       pickup.active = false

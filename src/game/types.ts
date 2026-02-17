@@ -2,6 +2,8 @@ export type Team = string
 
 export type AIState = "wander" | "aggro" | "flee"
 
+export type SurvivorEnemyArchetype = "none" | "mosquito_swarmer" | "giant_spider"
+
 export type PrimaryWeaponId =
   | "pistol"
   | "assault"

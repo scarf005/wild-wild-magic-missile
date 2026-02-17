@@ -44,6 +44,8 @@ export interface LevelUpChoiceHudItem {
   perkId: PerkId
   label: string
   detail: string
+  hint: string
+  school: "pyrogenics" | "neutral"
   icon: WeaponHudIcon
   stacks: number
   maxStacks: number
@@ -216,6 +218,7 @@ export const effectsVolumeSignal = signal(storedAudioOptions.effectsVolume)
 
 export const timeRemainingSignal = signal(MATCH_DURATION_SECONDS)
 export const fpsSignal = signal(0)
+export const enemyCountSignal = signal(0)
 export const pausedSignal = signal(false)
 export const coverageSlicesSignal = signal<CoverageSlice[]>([])
 export const matchResultSignal = signal<MatchResultHud>({

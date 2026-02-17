@@ -19,7 +19,6 @@ const KILL_CIRCLE_EXTRA_BURSTS = 3
 const KILL_CIRCLE_EXTRA_AMOUNT_MULTIPLIER = 0.85
 const KILL_CIRCLE_RADIUS_MIN = 0.2
 const KILL_CIRCLE_RADIUS_MAX = 0.95
-const KILL_HP_BONUS = 3
 const PRIMARY_WEAPON_CAP = 2
 const PRIMARY_RESERVE_PICKUP_CAP = 3
 const AIM_ASSIST_MAX_DISTANCE = 24
@@ -798,20 +797,6 @@ export const applyDamage = (
     : null
 
   if (isKilled) {
-    if (killer) {
-      killer.hp = Math.min(killer.maxHp, killer.hp + KILL_HP_BONUS)
-
-      const bonusPopup = deps.allocPopup()
-      bonusPopup.active = true
-      bonusPopup.position.set(
-        killer.position.x + randomRange(-0.22, 0.22),
-        killer.position.y - randomRange(0.85, 1.2),
-      )
-      bonusPopup.velocity.set(randomRange(-0.55, 0.55), randomRange(2.2, 3.2))
-      bonusPopup.text = `+${KILL_HP_BONUS} HP`
-      bonusPopup.color = "#a9ffbb"
-      bonusPopup.life = 0.72
-    }
 
     const deathBurst = randomFlowerBurst(damage, hitSpeed)
     let deathDirX = impactX

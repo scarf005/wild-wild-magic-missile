@@ -6,6 +6,9 @@ const parseBotIndex = (botId: string) => {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
+const SURVIVOR_MOSQUITO_ARCHETYPE = "mosquito_swarmer"
+const SURVIVOR_SPIDER_ARCHETYPE = "giant_spider"
+
 const updateBotAim = (
   bot: WorldState["bots"][number],
   botIndex: number,
@@ -84,6 +87,8 @@ export const updateAI = (world: WorldState, dt: number, deps: UpdateAIDeps) => {
   const nowMs = deps.nowMs()
   for (const bot of world.bots) {
     const isSurvivorSwarm = world.player.team === "arcanist" && bot.team === "swarm"
+    const isSurvivorMosquito = bot.survivorArchetype === SURVIVOR_MOSQUITO_ARCHETYPE
+    const isSurvivorSpider = bot.survivorArchetype === SURVIVOR_SPIDER_ARCHETYPE
     const botIndex = parseBotIndex(bot.id)
     bot.shootCooldown = Math.max(0, bot.shootCooldown - dt)
     bot.secondaryCooldown = Math.max(0, bot.secondaryCooldown - dt)
@@ -107,6 +112,9 @@ export const updateAI = (world: WorldState, dt: number, deps: UpdateAIDeps) => {
 
     if (isSurvivorSwarm) {
       bot.aiState = "aggro"
+      if (isSurvivorSpider && hasTarget && distanceToTarget < 2.6) {
+        bot.aiState = "flee"
+      }
     } else if (bot.hp <= bot.maxHp * 0.32) {
       bot.aiState = "flee"
     } else if (hasTarget && distanceToTarget < 24) {
@@ -136,23 +144,60 @@ export const updateAI = (world: WorldState, dt: number, deps: UpdateAIDeps) => {
       const distanceSafe = distanceToTarget || 1
       const towardX = toTargetX / distanceSafe
       const towardY = toTargetY / distanceSafe
-      const strafe = isSurvivorSwarm ? Math.sin(nowMs * 0.0026 + botIndex) * 0.02 : Math.sin(nowMs * 0.001 + botIndex)
-      const homingSpeedScale = isSurvivorSwarm ? 0.92 : 1
-      const pursuitBias = isSurvivorSwarm ? 1.05 + clamp((16 - distanceToTarget) / 16, 0, 0.12) : 1
+      const strafe = isSurvivorSwarm
+        ? isSurvivorSpider
+          ? Math.sin(nowMs * 0.0016 + botIndex * 0.5) * 0.012
+          : Math.sin(nowMs * 0.0032 + botIndex * 1.9) * 0.065
+        : Math.sin(nowMs * 0.001 + botIndex)
+      const homingSpeedScale = isSurvivorSwarm
+        ? isSurvivorSpider
+          ? 0.96
+          : 0.98
+        : 1
+      const pursuitBias = isSurvivorSwarm
+        ? isSurvivorSpider
+          ? 0.95 + clamp((8 - distanceToTarget) / 8, 0, 0.08)
+          : 1.1 + clamp((16 - distanceToTarget) / 16, 0, 0.22)
+        : 1
       desiredVelocityX = (towardX * pursuitBias + -towardY * strafe * 0.45) * bot.speed * homingSpeedScale
       desiredVelocityY = (towardY * pursuitBias + towardX * strafe * 0.45) * bot.speed * homingSpeedScale
 
-      updateBotAim(bot, botIndex, toTargetX, toTargetY, distanceToTarget, dt, nowMs, isSurvivorSwarm ? 0.08 : 0)
+      updateBotAim(
+        bot,
+        botIndex,
+        toTargetX,
+        toTargetY,
+        distanceToTarget,
+        dt,
+        nowMs,
+        isSurvivorSwarm ? isSurvivorSpider ? 0.12 : 0.06 : 0,
+      )
       const farBias = clamp((distanceToTarget - 8) / 24, 0, 1)
       const aimAlignment = bot.aim.x * towardX + bot.aim.y * towardY
-      const requiredAlignment = lerp(0.8, 0.91, farBias)
-      const hesitationChance = lerp(0.02, 0.16, farBias)
+      const requiredAlignment = isSurvivorSwarm
+        ? isSurvivorSpider
+          ? lerp(0.72, 0.82, farBias)
+          : lerp(0.82, 0.92, farBias)
+        : lerp(0.8, 0.91, farBias)
+      const hesitationChance = isSurvivorSwarm
+        ? isSurvivorSpider
+          ? lerp(0.04, 0.2, farBias)
+          : lerp(0.015, 0.12, farBias)
+        : lerp(0.02, 0.16, farBias)
+      const attackRange = isSurvivorSwarm
+        ? isSurvivorSpider
+          ? 18
+          : 30
+        : 32
 
-      if (distanceToTarget < 32 && aimAlignment > requiredAlignment && Math.random() > hesitationChance) {
+      if (distanceToTarget < attackRange && aimAlignment > requiredAlignment && Math.random() > hesitationChance) {
         deps.firePrimary(bot.id)
       }
 
-      if (distanceToTarget < 12 && Math.random() < 0.014) {
+      const throwChance = isSurvivorSwarm
+        ? isSurvivorMosquito ? 0.007 : 0.002
+        : 0.014
+      if (distanceToTarget < 12 && Math.random() < throwChance) {
         deps.throwSecondary(bot.id)
       }
     }
@@ -181,7 +226,11 @@ export const updateAI = (world: WorldState, dt: number, deps: UpdateAIDeps) => {
       }
     }
 
-    const velocityResponse = isSurvivorSwarm ? 14 : 16
+    const velocityResponse = isSurvivorSwarm
+      ? isSurvivorSpider
+        ? 13
+        : 18
+      : 16
     bot.velocity.x = lerp(bot.velocity.x, desiredVelocityX, clamp(dt * velocityResponse, 0, 1))
     bot.velocity.y = lerp(bot.velocity.y, desiredVelocityY, clamp(dt * velocityResponse, 0, 1))
 

@@ -28,6 +28,8 @@ const FLOWER_BLOOM_DURATION_SECONDS = 0.066
 const FLOWER_LIFETIME_MIN_SECONDS = 14
 const FLOWER_LIFETIME_MAX_SECONDS = 28
 const PLAYER_IMPACT_BLOOM_DELAYS = [0.05, 0.1, 0.15, 0.2, 0.25]
+const SURVIVOR_BLOOD_COLOR = "#a6bf45"
+const SURVIVOR_BLOOD_ACCENT = "#859a2f"
 
 export interface FlowerBurstProfile {
   amount: number
@@ -91,8 +93,8 @@ const flowerPalette = (
   if (ownerId === deps.playerId) {
     return {
       team: "white" as const,
-      color: isSurvivorMode ? "#7a0d0d" : "#9a1e1e",
-      accent: isSurvivorMode ? "#280505" : "#d84b35",
+      color: isSurvivorMode ? SURVIVOR_BLOOD_COLOR : "#9a1e1e",
+      accent: isSurvivorMode ? SURVIVOR_BLOOD_ACCENT : "#d84b35",
       fromPlayer: true,
     }
   }
@@ -111,8 +113,8 @@ const flowerPalette = (
     if (factionColor) {
       return {
         team: scoreOwnerId,
-        color: isSurvivorMode ? bloodify(factionColor, 0.66, 42) : bloodify(factionColor, 0.82, 26),
-        accent: isSurvivorMode ? "#2a0505" : "#4b1613",
+        color: isSurvivorMode ? SURVIVOR_BLOOD_COLOR : bloodify(factionColor, 0.82, 26),
+        accent: isSurvivorMode ? SURVIVOR_BLOOD_ACCENT : "#4b1613",
         fromPlayer: scoreOwnerId === deps.playerId,
       }
     }
@@ -123,8 +125,8 @@ const flowerPalette = (
   if (!Number.isInteger(botIndex) || botIndex <= 0) {
     return {
       team: "white" as const,
-      color: isSurvivorMode ? "#500808" : "#5a1b1b",
-      accent: isSurvivorMode ? "#190303" : "#2f0f0f",
+      color: isSurvivorMode ? SURVIVOR_BLOOD_COLOR : "#5a1b1b",
+      accent: isSurvivorMode ? SURVIVOR_BLOOD_ACCENT : "#2f0f0f",
       fromPlayer: false,
     }
   }
@@ -132,8 +134,8 @@ const flowerPalette = (
   const palette = deps.botPalette(ownerId)
   return {
     team: "blue" as const,
-    color: isSurvivorMode ? bloodify(palette.tone, 0.58, 46) : bloodify(palette.tone, 0.72, 30),
-    accent: isSurvivorMode ? "#180404" : "#2a0e0e",
+    color: isSurvivorMode ? SURVIVOR_BLOOD_COLOR : bloodify(palette.tone, 0.72, 30),
+    accent: isSurvivorMode ? SURVIVOR_BLOOD_ACCENT : "#2a0e0e",
     fromPlayer: false,
   }
 }

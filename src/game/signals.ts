@@ -34,6 +34,21 @@ export interface PlayerPerkHudItem {
   stacks: number
 }
 
+export interface XpHudState {
+  level: number
+  xp: number
+  nextLevelXp: number
+}
+
+export interface LevelUpChoiceHudItem {
+  perkId: PerkId
+  label: string
+  detail: string
+  icon: WeaponHudIcon
+  stacks: number
+  maxStacks: number
+}
+
 export interface RenderPathProfileHud {
   frames: number
   pickupVisibleFrames: number
@@ -189,7 +204,7 @@ export const debugSkipToMatchEndSignal = signal(false)
 export const persistDebugOptions = () => writeStoredDebugOptions()
 export const persistAudioOptions = () => writeStoredAudioOptions()
 
-export const selectedGameModeSignal = signal<GameModeId>("ffa")
+export const selectedGameModeSignal = signal<GameModeId>("survivor")
 export const ffaPlayerCountSignal = signal(4)
 export const tdmTeamSizeSignal = signal(4)
 export const duoTeamCountSignal = signal(4)
@@ -227,6 +242,13 @@ export const secondaryModeSignal = signal<SecondaryMode>("grenade")
 export const secondaryWeaponCooldownSignal = signal("RMB to throw")
 export const hpSignal = signal({ hp: UNIT_BASE_HP, maxHp: UNIT_BASE_HP })
 export const playerPerksSignal = signal<PlayerPerkHudItem[]>([])
+export const xpSignal = signal<XpHudState>({
+  level: 1,
+  xp: 0,
+  nextLevelXp: 12,
+})
+export const levelUpChoicesSignal = signal<LevelUpChoiceHudItem[]>([])
+export const levelUpSelectionSignal = signal<PerkId | "skip" | null>(null)
 export const renderPathProfileSignal = signal<RenderPathProfileHud>({
   frames: 0,
   pickupVisibleFrames: 0,

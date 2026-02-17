@@ -83,6 +83,7 @@ export interface UpdateAIDeps {
 export const updateAI = (world: WorldState, dt: number, deps: UpdateAIDeps) => {
   const nowMs = deps.nowMs()
   for (const bot of world.bots) {
+    const isSurvivorSwarm = world.player.team === "arcanist" && bot.team === "swarm"
     const botIndex = parseBotIndex(bot.id)
     bot.shootCooldown = Math.max(0, bot.shootCooldown - dt)
     bot.secondaryCooldown = Math.max(0, bot.secondaryCooldown - dt)
@@ -104,7 +105,9 @@ export const updateAI = (world: WorldState, dt: number, deps: UpdateAIDeps) => {
     const toTargetX = nearestTarget.deltaX
     const toTargetY = nearestTarget.deltaY
 
-    if (bot.hp <= bot.maxHp * 0.32) {
+    if (isSurvivorSwarm) {
+      bot.aiState = "aggro"
+    } else if (bot.hp <= bot.maxHp * 0.32) {
       bot.aiState = "flee"
     } else if (hasTarget && distanceToTarget < 24) {
       bot.aiState = "aggro"
@@ -133,11 +136,13 @@ export const updateAI = (world: WorldState, dt: number, deps: UpdateAIDeps) => {
       const distanceSafe = distanceToTarget || 1
       const towardX = toTargetX / distanceSafe
       const towardY = toTargetY / distanceSafe
-      const strafe = Math.sin(nowMs * 0.001 + botIndex)
-      desiredVelocityX = (towardX + -towardY * strafe * 0.45) * bot.speed
-      desiredVelocityY = (towardY + towardX * strafe * 0.45) * bot.speed
+      const strafe = isSurvivorSwarm ? Math.sin(nowMs * 0.0026 + botIndex) * 0.02 : Math.sin(nowMs * 0.001 + botIndex)
+      const homingSpeedScale = isSurvivorSwarm ? 0.92 : 1
+      const pursuitBias = isSurvivorSwarm ? 1.05 + clamp((16 - distanceToTarget) / 16, 0, 0.12) : 1
+      desiredVelocityX = (towardX * pursuitBias + -towardY * strafe * 0.45) * bot.speed * homingSpeedScale
+      desiredVelocityY = (towardY * pursuitBias + towardX * strafe * 0.45) * bot.speed * homingSpeedScale
 
-      updateBotAim(bot, botIndex, toTargetX, toTargetY, distanceToTarget, dt, nowMs)
+      updateBotAim(bot, botIndex, toTargetX, toTargetY, distanceToTarget, dt, nowMs, isSurvivorSwarm ? 0.08 : 0)
       const farBias = clamp((distanceToTarget - 8) / 24, 0, 1)
       const aimAlignment = bot.aim.x * towardX + bot.aim.y * towardY
       const requiredAlignment = lerp(0.8, 0.91, farBias)
@@ -176,8 +181,9 @@ export const updateAI = (world: WorldState, dt: number, deps: UpdateAIDeps) => {
       }
     }
 
-    bot.velocity.x = lerp(bot.velocity.x, desiredVelocityX, clamp(dt * 16, 0, 1))
-    bot.velocity.y = lerp(bot.velocity.y, desiredVelocityY, clamp(dt * 16, 0, 1))
+    const velocityResponse = isSurvivorSwarm ? 14 : 16
+    bot.velocity.x = lerp(bot.velocity.x, desiredVelocityX, clamp(dt * velocityResponse, 0, 1))
+    bot.velocity.y = lerp(bot.velocity.y, desiredVelocityY, clamp(dt * velocityResponse, 0, 1))
 
     bot.position.x += bot.velocity.x * dt
     bot.position.y += bot.velocity.y * dt

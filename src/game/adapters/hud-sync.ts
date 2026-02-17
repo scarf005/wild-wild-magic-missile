@@ -3,6 +3,8 @@ import {
   crosshairSignal,
   fpsSignal,
   hpSignal,
+  levelUpChoicesSignal,
+  levelUpSelectionSignal,
   matchResultSignal,
   menuVisibleSignal,
   pausedSignal,
@@ -17,6 +19,7 @@ import {
   secondaryWeaponCooldownSignal,
   statusMessageSignal,
   timeRemainingSignal,
+  xpSignal,
 } from "../signals.ts"
 import type { PlayerPerkHudItem, PrimaryWeaponHudItem } from "../signals.ts"
 import { BURNED_FACTION_COLOR, BURNED_FACTION_ID } from "../factions.ts"
@@ -278,6 +281,13 @@ export const resetHudSignals = (world: WorldState, canvas: HTMLCanvasElement) =>
   secondaryWeaponCooldownSignal.value = t`RMB to throw`
   hpSignal.value = { hp: world.player.hp, maxHp: world.player.maxHp }
   playerPerksSignal.value = []
+  xpSignal.value = {
+    level: 1,
+    xp: 0,
+    nextLevelXp: 12,
+  }
+  levelUpChoicesSignal.value = []
+  levelUpSelectionSignal.value = null
   syncRenderPathProfileSignal(world)
   statusMessageSignal.value = t`Click once to wake audio, then begin fighting`
   menuVisibleSignal.value = true

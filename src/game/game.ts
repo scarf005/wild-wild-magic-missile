@@ -29,6 +29,9 @@ import {
   squadTeamCountSignal,
   statusMessageSignal,
   tdmTeamSizeSignal,
+  levelUpChoicesSignal,
+  levelUpSelectionSignal,
+  xpSignal,
 } from "./signals.ts"
 import { type InputAdapter, setupInputAdapter } from "./adapters/input.ts"
 import { renderScene } from "./render/scene.ts"
@@ -76,7 +79,7 @@ import {
 } from "./world/obstacle-grid.ts"
 import { spawnFlowers, updateDamagePopups, updateFlowers } from "./systems/flowers.ts"
 import { igniteMolotov, spawnFlamePatch, updateMolotovZones } from "./systems/molotov.ts"
-import { collectNearbyPickup, spawnPerkPickupAt, spawnPickupAt, updatePickups } from "./systems/pickups.ts"
+import { collectNearbyPickup, spawnPickupAt, spawnXpPickupAt, updatePickups } from "./systems/pickups.ts"
 import { updateCombatFeel, updateCrosshairWorld, updatePlayer } from "./systems/player.ts"
 import { updateProjectiles } from "./systems/projectiles.ts"
 import { respawnUnit, setupWorldUnits, spawnAllUnits, spawnMapLoot, spawnObstacles } from "./systems/respawn.ts"
@@ -84,7 +87,7 @@ import { explodeGrenade, throwSecondary, updateThrowables } from "./systems/thro
 import { updateAI } from "./systems/ai.ts"
 import { Flower, type Unit } from "./entities.ts"
 import { HIGH_TIER_PRIMARY_IDS, PRIMARY_WEAPONS } from "./weapons.ts"
-import { applyPerkToUnit, perkStacks, randomPerkId } from "./perks.ts"
+import { applyPerkToUnit, PERK_CONFIGS, PERK_POOL, perkStacks } from "./perks.ts"
 import {
   botPalette,
   BURNED_FACTION_COLOR,
@@ -109,7 +112,7 @@ const WHITE_LOOT_BOX_SPAWN_INTERVAL_END_SECONDS = 3
 const WHITE_LOOT_BOX_MAX_FREQUENCY_TIME_REMAINING_SECONDS = 10
 const WHITE_LOOT_BOX_HP = 8
 const WHITE_LOOT_BOX_RADIUS = 0.95
-const KILL_PETAL_COLORS = ["#8bff92", "#5cf47a", "#b4ffb8"]
+const KILL_PETAL_COLORS = ["#8a1d16", "#b42b1f", "#6e110d", "#d4472f"]
 const FX_CULL_PADDING_WORLD = 2.25
 const FPS_SIGNAL_UPDATE_INTERVAL_SECONDS = 0.2
 const HUD_SYNC_INTERVAL_SECONDS = 0.1
@@ -121,6 +124,17 @@ const TEAM_COLOR_RAMP = [
   "#c9a5ff",
   "#ff9dd2",
 ]
+const SURVIVOR_MATCH_DURATION_SECONDS = 20 * 60
+const SURVIVOR_MIN_PLAYERS = 16
+const SURVIVOR_MAX_PLAYERS = 72
+const SURVIVOR_INITIAL_PLAYERS = 10
+const SURVIVOR_SWARM_RAMP_INTERVAL_START_SECONDS = 8
+const SURVIVOR_SWARM_RAMP_INTERVAL_END_SECONDS = 2.6
+const SURVIVOR_CONTACT_DAMAGE_PER_SECOND = 3.2
+const SURVIVOR_PLAYER_TEAM = "arcanist"
+const SURVIVOR_SWARM_TEAM = "swarm"
+const SURVIVOR_BASE_XP_TO_LEVEL = 12
+const SURVIVOR_XP_GROWTH = 1.14
 
 type FogCullBounds = CullBounds
 
@@ -141,6 +155,12 @@ export class FlowerArenaGame {
   private lastMusicVolume = -1
   private lastEffectsVolume = -1
   private lastLocale = languageSignal.value
+  private survivorLevel = 1
+  private survivorXp = 0
+  private survivorNextLevelXp = SURVIVOR_BASE_XP_TO_LEVEL
+  private survivorPendingLevelChoices = 0
+  private survivorTargetBotCount = 0
+  private survivorSwarmRampTimer = SURVIVOR_SWARM_RAMP_INTERVAL_START_SECONDS
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas
@@ -164,6 +184,16 @@ export class FlowerArenaGame {
   }
 
   private localizeFactionLabel(factionId: string) {
+    if (this.currentMode === "survivor") {
+      if (factionId === SURVIVOR_PLAYER_TEAM) {
+        return t`Arcanist`
+      }
+      if (factionId === SURVIVOR_SWARM_TEAM) {
+        return t`Insect Swarm`
+      }
+      return factionId
+    }
+
     if (this.currentMode === "ffa") {
       if (factionId === this.world.player.id) {
         return t`You`
@@ -227,6 +257,11 @@ export class FlowerArenaGame {
         this.world.audioPrimed = true
       }
     })
+
+    if (this.currentMode === "survivor" && !this.world.started) {
+      this.beginMatch()
+    }
+
     this.previousTime = performance.now()
     this.fpsSignalElapsed = FPS_SIGNAL_UPDATE_INTERVAL_SECONDS
     this.hudSyncElapsed = HUD_SYNC_INTERVAL_SECONDS
@@ -270,6 +305,39 @@ export class FlowerArenaGame {
 
   private applyMatchMode() {
     const mode = selectedGameModeSignal.value
+    if (mode === "survivor") {
+      const requestedPlayers = clamp(Math.round(ffaPlayerCountSignal.value), SURVIVOR_MIN_PLAYERS, SURVIVOR_MAX_PLAYERS)
+      const targetBotCount = clamp(requestedPlayers - 1, 1, this.botPool.length)
+      const initialBotCount = clamp(
+        Math.min(targetBotCount, SURVIVOR_INITIAL_PLAYERS - 1),
+        1,
+        targetBotCount,
+      )
+      const activeBots = this.botPool.slice(0, initialBotCount)
+
+      this.currentMode = mode
+      this.survivorTargetBotCount = targetBotCount
+      this.survivorSwarmRampTimer = SURVIVOR_SWARM_RAMP_INTERVAL_START_SECONDS
+      ffaPlayerCountSignal.value = targetBotCount + 1
+
+      this.world.bots = activeBots
+      this.world.units = [this.world.player, ...activeBots]
+      rebuildUnitLookup(this.world)
+
+      this.world.player.team = SURVIVOR_PLAYER_TEAM
+      for (const bot of activeBots) {
+        bot.team = SURVIVOR_SWARM_TEAM
+      }
+
+      const factions: FactionDescriptor[] = [
+        { id: SURVIVOR_PLAYER_TEAM, label: t`Arcanist`, color: "#ffd9b3" },
+        { id: SURVIVOR_SWARM_TEAM, label: t`Insect Swarm`, color: "#c3604a" },
+      ]
+      this.world.factions = factions
+      this.world.factionFlowerCounts = createFactionFlowerCounts(factions)
+      return
+    }
+
     const requestedPlayers = mode === "ffa"
       ? clamp(Math.round(ffaPlayerCountSignal.value), 2, 8)
       : mode === "tdm"
@@ -282,6 +350,7 @@ export class FlowerArenaGame {
     const activeBots = this.botPool.slice(0, botCount)
 
     this.currentMode = mode
+    this.survivorTargetBotCount = 0
     if (mode === "ffa") {
       ffaPlayerCountSignal.value = totalPlayers
     }
@@ -488,6 +557,35 @@ export class FlowerArenaGame {
     return t`Kevlar Vest`
   }
 
+  private localizePerkDetail(perkId: PerkId, stacks: number) {
+    if (perkId === "laser_sight") {
+      return t`Soft aim assist cone`
+    }
+    if (perkId === "ricochet_shells") {
+      return t`Shotgun bounces x5`
+    }
+    if (perkId === "proximity_grenades") {
+      return t`Grenades explode near enemies`
+    }
+    if (perkId === "rapid_reload") {
+      return t`Reload speed +25%`
+    }
+    if (perkId === "heavy_pellets") {
+      return t`Pellet size +50%, fire rate -25%`
+    }
+    if (perkId === "extra_heart") {
+      return t`Max HP +${stacks * 3}`
+    }
+    if (perkId === "overpressure_rounds") {
+      return t`Damage +15%, fire rate -8%`
+    }
+    if (perkId === "extra_stamina") {
+      return t`Move speed +12%`
+    }
+
+    return t`Damage taken -1 (min 1)`
+  }
+
   private randomLootablePrimaryForMatch() {
     if (this.canSpawnFlamethrower()) {
       return randomLootablePrimary()
@@ -516,11 +614,244 @@ export class FlowerArenaGame {
     })
   }
 
-  private spawnPerkPickupDropAt(x: number, y: number, force = true) {
-    spawnPerkPickupAt(this.world, { x, y }, {
-      force,
-      randomPerk: () => randomPerkId(),
+  private survivorXpCostForLevel(level: number) {
+    return Math.max(1, Math.round(SURVIVOR_BASE_XP_TO_LEVEL * (SURVIVOR_XP_GROWTH ** Math.max(0, level - 1))))
+  }
+
+  private resetSurvivorProgress() {
+    this.survivorLevel = 1
+    this.survivorXp = 0
+    this.survivorNextLevelXp = this.survivorXpCostForLevel(this.survivorLevel)
+    this.survivorPendingLevelChoices = 0
+    xpSignal.value = {
+      level: this.survivorLevel,
+      xp: this.survivorXp,
+      nextLevelXp: this.survivorNextLevelXp,
+    }
+    levelUpChoicesSignal.value = []
+    levelUpSelectionSignal.value = null
+  }
+
+  private spawnSurvivorXpDropAt(x: number, y: number, baseHp: number) {
+    const value = Math.max(1, Math.round(baseHp * 0.08))
+    spawnXpPickupAt(this.world, { x, y }, {
+      force: true,
+      value,
     })
+  }
+
+  private isSurvivorLevelUpActive() {
+    return this.currentMode === "survivor" && levelUpChoicesSignal.value.length > 0
+  }
+
+  private openSurvivorLevelUpChoices() {
+    const available: PerkId[] = []
+    const maxed: PerkId[] = []
+    for (const perkId of PERK_POOL) {
+      const config = PERK_CONFIGS[perkId]
+      const stacks = perkStacks(this.world.player, perkId)
+      if (stacks < config.maxStacks) {
+        available.push(perkId)
+      } else {
+        maxed.push(perkId)
+      }
+    }
+
+    if (available.length <= 0 && maxed.length <= 0) {
+      this.survivorPendingLevelChoices = Math.max(0, this.survivorPendingLevelChoices - 1)
+      levelUpChoicesSignal.value = []
+      return
+    }
+
+    const pool = [...available]
+    for (let index = pool.length - 1; index > 0; index -= 1) {
+      const swapIndex = Math.floor(Math.random() * (index + 1))
+      const temp = pool[index]
+      pool[index] = pool[swapIndex]
+      pool[swapIndex] = temp
+    }
+
+    for (let index = maxed.length - 1; index > 0; index -= 1) {
+      const swapIndex = Math.floor(Math.random() * (index + 1))
+      const temp = maxed[index]
+      maxed[index] = maxed[swapIndex]
+      maxed[swapIndex] = temp
+    }
+
+    const choicePool = [...pool]
+    if (choicePool.length < 3) {
+      choicePool.push(...maxed.slice(0, 3 - choicePool.length))
+    }
+
+    const choices = choicePool.slice(0, 3).map((perkId) => {
+      const config = PERK_CONFIGS[perkId]
+      const stacks = perkStacks(this.world.player, perkId)
+      return {
+        perkId,
+        label: this.localizePerk(perkId),
+        detail: this.localizePerkDetail(perkId, Math.max(1, stacks + 1)),
+        icon: perkId,
+        stacks,
+        maxStacks: config.maxStacks,
+      }
+    })
+
+    levelUpChoicesSignal.value = choices
+    levelUpSelectionSignal.value = null
+  }
+
+  private resolveSurvivorLevelUpSelection() {
+    if (this.currentMode !== "survivor") {
+      if (levelUpSelectionSignal.value !== null) {
+        levelUpSelectionSignal.value = null
+      }
+      return
+    }
+
+    if (this.survivorPendingLevelChoices > 0 && levelUpChoicesSignal.value.length <= 0) {
+      this.openSurvivorLevelUpChoices()
+    }
+
+    const selection = levelUpSelectionSignal.value
+    if (!selection) {
+      return
+    }
+
+    const currentChoices = levelUpChoicesSignal.value
+    levelUpSelectionSignal.value = null
+    if (selection !== "skip") {
+      const selectionAllowed = currentChoices.some((choice) => choice.perkId === selection)
+      if (!selectionAllowed) {
+        return
+      }
+
+      const result = applyPerkToUnit(this.world.player, selection)
+      if (result.applied) {
+        const localizedPerk = this.localizePerk(selection)
+        statusMessageSignal.value = result.stacks > 1
+          ? t`Perk acquired ${localizedPerk} x${result.stacks}`
+          : t`Perk acquired ${localizedPerk}`
+      }
+    }
+
+    this.survivorPendingLevelChoices = Math.max(0, this.survivorPendingLevelChoices - 1)
+    levelUpChoicesSignal.value = []
+  }
+
+  private grantSurvivorXp(amount: number) {
+    if (this.currentMode !== "survivor") {
+      return
+    }
+
+    this.survivorXp += Math.max(1, Math.floor(amount))
+    while (this.survivorXp >= this.survivorNextLevelXp) {
+      this.survivorXp -= this.survivorNextLevelXp
+      this.survivorLevel += 1
+      this.survivorNextLevelXp = this.survivorXpCostForLevel(this.survivorLevel)
+      this.survivorPendingLevelChoices += 1
+    }
+
+    xpSignal.value = {
+      level: this.survivorLevel,
+      xp: this.survivorXp,
+      nextLevelXp: this.survivorNextLevelXp,
+    }
+  }
+
+  private configureSurvivorSwarmBot(bot: Unit) {
+    bot.team = SURVIVOR_SWARM_TEAM
+    bot.maxHp = Math.max(4, Math.round(UNIT_BASE_HP * 0.6))
+    bot.hp = bot.maxHp
+    bot.radius = BOT_RADIUS * 0.86
+    bot.damageMultiplier = 1
+    bot.fireRateMultiplier = 1
+    bot.bulletSizeMultiplier = 1
+    bot.speed = BOT_BASE_SPEED * 0.82
+    bot.grenadeTimer = 1
+    bot.reloadSpeedMultiplier = 1
+    bot.damageTakenMultiplier = 1
+    bot.damageReductionFlat = 0
+    bot.explosiveRadiusMultiplier = 1
+    bot.aimAssistRadians = 0
+    bot.shotgunRicochet = false
+    bot.proximityGrenades = false
+    bot.laserSight = false
+    bot.perkStacks = {}
+    bot.matchKills = 0
+    bot.primarySlots.length = 0
+    bot.primarySlotIndex = 0
+    bot.primarySlotSequence = 0
+    this.equipPrimary(bot.id, "pistol", Number.POSITIVE_INFINITY)
+    bot.secondaryMode = "grenade"
+  }
+
+  private activateSurvivorSwarmBot(bot: Unit) {
+    this.configureSurvivorSwarmBot(bot)
+    this.world.bots.push(bot)
+    this.world.units.push(bot)
+    rebuildUnitLookup(this.world)
+    this.respawnUnit(bot.id)
+    this.equipPrimary(bot.id, "pistol", Number.POSITIVE_INFINITY)
+  }
+
+  private updateSurvivorSwarmPressure(dt: number) {
+    if (this.currentMode !== "survivor" || !this.world.running || this.world.finished) {
+      return
+    }
+
+    const remaining = this.survivorTargetBotCount - this.world.bots.length
+    if (remaining <= 0) {
+      return
+    }
+
+    this.survivorSwarmRampTimer -= dt
+    if (this.survivorSwarmRampTimer > 0) {
+      return
+    }
+
+    const elapsed = SURVIVOR_MATCH_DURATION_SECONDS - this.world.timeRemaining
+    const progress = clamp(elapsed / SURVIVOR_MATCH_DURATION_SECONDS, 0, 1)
+    const spawnBatch = progress >= 0.72 ? 3 : progress >= 0.34 ? 2 : 1
+    const spawnCount = Math.min(remaining, spawnBatch)
+
+    for (let index = 0; index < spawnCount; index += 1) {
+      const nextBot = this.botPool[this.world.bots.length]
+      if (!nextBot) {
+        break
+      }
+      this.activateSurvivorSwarmBot(nextBot)
+    }
+
+    this.survivorSwarmRampTimer = lerp(
+      SURVIVOR_SWARM_RAMP_INTERVAL_START_SECONDS,
+      SURVIVOR_SWARM_RAMP_INTERVAL_END_SECONDS,
+      progress,
+    )
+  }
+
+  private applySurvivorContactDamage(dt: number) {
+    if (this.currentMode !== "survivor" || !this.world.player.hp) {
+      return
+    }
+
+    let attackers = 0
+    for (const bot of this.world.bots) {
+      if (bot.team !== SURVIVOR_SWARM_TEAM || bot.hp <= 0) {
+        continue
+      }
+
+      const hitRadius = bot.radius + this.world.player.radius
+      if (distSquared(bot.position.x, bot.position.y, this.world.player.position.x, this.world.player.position.y) <= hitRadius * hitRadius) {
+        attackers += 1
+      }
+    }
+
+    if (attackers <= 0) {
+      return
+    }
+
+    const pressure = Math.min(8, attackers)
+    this.world.player.hp = Math.max(0, this.world.player.hp - SURVIVOR_CONTACT_DAMAGE_PER_SECOND * pressure * dt)
   }
 
   private setupInput() {
@@ -529,9 +860,19 @@ export class FlowerArenaGame {
       onBeginMatch: () => this.beginMatch(),
       onReturnToMenu: () => this.returnToMenu(),
       onTogglePause: () => this.togglePause(),
-      onPrimaryDown: () => this.firePrimary(this.world.player.id),
+      onPrimaryDown: () => {
+        if (this.isSurvivorLevelUpActive()) {
+          return
+        }
+        this.firePrimary(this.world.player.id)
+      },
       onPrimarySwap: (direction) => this.swapPrimary(this.world.player.id, direction),
-      onSecondaryDown: () => this.throwSecondary(this.world.player.id),
+      onSecondaryDown: () => {
+        if (this.isSurvivorLevelUpActive()) {
+          return
+        }
+        this.throwSecondary(this.world.player.id)
+      },
       onCrosshair: (x, y, visible) => {
         crosshairSignal.value = { x, y, visible }
       },
@@ -555,7 +896,7 @@ export class FlowerArenaGame {
     this.world.running = true
     this.world.paused = false
     this.world.finished = false
-    this.world.timeRemaining = MATCH_DURATION_SECONDS
+    this.world.timeRemaining = this.currentMode === "survivor" ? SURVIVOR_MATCH_DURATION_SECONDS : MATCH_DURATION_SECONDS
     this.world.arenaRadius = ARENA_START_RADIUS
     this.world.pickupTimer = LOOT_PICKUP_INTERVAL_SECONDS
     this.world.lootBoxTimer = this.whiteLootBoxSpawnIntervalSeconds()
@@ -565,6 +906,7 @@ export class FlowerArenaGame {
     this.world.playerKills = 0
     this.world.playerDamageDealt = 0
     this.world.playerFlowerTotal = 0
+    this.resetSurvivorProgress()
     resetRenderPathProfile(this.world)
     this.world.impactFeelLevel = clamp(debugImpactFeelLevelSignal.value, 1, 2)
     this.world.terrainMap = createBarrenGardenMap(112)
@@ -597,31 +939,40 @@ export class FlowerArenaGame {
     player.primarySlotIndex = 0
     player.primarySlotSequence = 0
     this.equipPrimary(player.id, "pistol", Number.POSITIVE_INFINITY)
+    if (this.currentMode === "survivor") {
+      player.secondaryMode = "molotov"
+    }
 
     for (const bot of this.world.bots) {
-      bot.maxHp = UNIT_BASE_HP
-      bot.hp = UNIT_BASE_HP
-      bot.radius = BOT_RADIUS
-      bot.damageMultiplier = 1
-      bot.fireRateMultiplier = 1
-      bot.bulletSizeMultiplier = 1
-      bot.speed = BOT_BASE_SPEED
-      bot.grenadeTimer = 1
-      bot.reloadSpeedMultiplier = 1
-      bot.damageTakenMultiplier = 1
-      bot.damageReductionFlat = 0
-      bot.explosiveRadiusMultiplier = 1
-      bot.aimAssistRadians = 0
-      bot.shotgunRicochet = false
-      bot.proximityGrenades = false
-      bot.laserSight = false
-      bot.perkStacks = {}
-      bot.matchKills = 0
-      bot.primarySlots.length = 0
-      bot.primarySlotIndex = 0
-      bot.primarySlotSequence = 0
-      this.equipPrimary(bot.id, "pistol", Number.POSITIVE_INFINITY)
-      bot.secondaryMode = Math.random() > 0.58 ? "molotov" : "grenade"
+      if (this.currentMode === "survivor") {
+        this.configureSurvivorSwarmBot(bot)
+      } else {
+        bot.maxHp = UNIT_BASE_HP
+        bot.hp = UNIT_BASE_HP
+        bot.radius = BOT_RADIUS
+        bot.damageMultiplier = 1
+        bot.fireRateMultiplier = 1
+        bot.bulletSizeMultiplier = 1
+        bot.speed = BOT_BASE_SPEED
+        bot.grenadeTimer = 1
+        bot.reloadSpeedMultiplier = 1
+        bot.damageTakenMultiplier = 1
+        bot.damageReductionFlat = 0
+        bot.explosiveRadiusMultiplier = 1
+        bot.aimAssistRadians = 0
+        bot.shotgunRicochet = false
+        bot.proximityGrenades = false
+        bot.laserSight = false
+        bot.perkStacks = {}
+        bot.matchKills = 0
+        bot.primarySlots.length = 0
+        bot.primarySlotIndex = 0
+        bot.primarySlotSequence = 0
+        this.equipPrimary(bot.id, "pistol", Number.POSITIVE_INFINITY)
+        bot.secondaryMode = Math.random() > 0.58
+          ? "molotov"
+          : "grenade"
+      }
     }
 
     for (const projectile of this.world.projectiles) {
@@ -684,10 +1035,12 @@ export class FlowerArenaGame {
 
     spawnObstacles(this.world)
     spawnAllUnits(this.world)
-    spawnMapLoot(this.world, {
-      spawnPickupAt: (x, y) => this.spawnLootPickupAt(x, y),
-    })
-    this.spawnGuaranteedCenterHighTierLoot()
+    if (this.currentMode !== "survivor") {
+      spawnMapLoot(this.world, {
+        spawnPickupAt: (x, y) => this.spawnLootPickupAt(x, y),
+      })
+      this.spawnGuaranteedCenterHighTierLoot()
+    }
 
     this.world.cameraShake = 0
     this.world.cameraOffset.set(0, 0)
@@ -707,7 +1060,34 @@ export class FlowerArenaGame {
     this.world.running = false
     this.world.paused = false
     this.world.finished = true
+    this.survivorPendingLevelChoices = 0
+    levelUpChoicesSignal.value = []
+    levelUpSelectionSignal.value = null
     this.audioDirector.startMenu()
+
+    if (this.currentMode === "survivor") {
+      const survivedSeconds = Math.max(0, Math.round(SURVIVOR_MATCH_DURATION_SECONDS - this.world.timeRemaining))
+      const minutes = Math.floor(survivedSeconds / 60)
+      const seconds = survivedSeconds % 60
+      const timeLabel = `${minutes}:${seconds.toString().padStart(2, "0")}`
+
+      statusMessageSignal.value = this.world.player.hp > 0
+        ? t`Survived ${timeLabel}. The swarm is ash.`
+        : t`Fallen at ${timeLabel}. The swarm consumed the run.`
+
+      setMatchResultSignal(
+        { label: t`Arcanist`, color: "#ffd9b3" },
+        [{ color: "#ffd9b3", percent: 100 }],
+        [
+          { label: t`Survival Time`, value: timeLabel },
+          { label: t`Kills`, value: this.world.playerKills.toLocaleString() },
+          { label: t`Damage`, value: Math.round(this.world.playerDamageDealt).toLocaleString() },
+        ],
+        [{ id: "arcanist", label: t`Arcanist`, color: "#ffd9b3", flowers: this.world.playerKills, percent: 100 }],
+      )
+      pausedSignal.value = false
+      return
+    }
 
     const factionStandings = this.world.factions
       .map((faction) => ({
@@ -786,6 +1166,13 @@ export class FlowerArenaGame {
   }
 
   private returnToMenu() {
+    if (this.currentMode === "survivor") {
+      levelUpChoicesSignal.value = []
+      levelUpSelectionSignal.value = null
+      this.beginMatch()
+      return
+    }
+
     this.world.running = false
     this.world.paused = false
     this.world.finished = false
@@ -896,11 +1283,11 @@ export class FlowerArenaGame {
   }
 
   private spawnKillPetalBurst(x: number, y: number) {
-    const count = 22
+    const count = 6
     for (let index = 0; index < count; index += 1) {
       const petal = this.allocKillPetal()
       const angle = Math.random() * Math.PI * 2
-      const speed = randomRange(6.4, 21.6)
+      const speed = randomRange(4.2, 15.4)
       petal.active = true
       petal.position.set(
         x + randomRange(-0.18, 0.18),
@@ -911,16 +1298,16 @@ export class FlowerArenaGame {
         Math.sin(angle) * speed,
       )
       petal.rotation = randomRange(0, Math.PI * 2)
-      petal.angularVelocity = randomRange(-12.5, 12.5)
-      petal.size = randomRange(0.06, 0.14)
-      petal.maxLife = 0.25
+      petal.angularVelocity = randomRange(-8.8, 8.8)
+      petal.size = randomRange(0.08, 0.2)
+      petal.maxLife = randomRange(0.28, 0.44)
       petal.life = petal.maxLife
       petal.color = KILL_PETAL_COLORS[Math.floor(Math.random() * KILL_PETAL_COLORS.length)]
     }
   }
 
   private updateKillPetals(dt: number, fogCullBounds?: FogCullBounds) {
-    const drag = clamp(1 - dt * 2.8, 0, 1)
+    const drag = clamp(1 - dt * 5.4, 0, 1)
     for (const petal of this.world.killPetals) {
       if (!petal.active) {
         continue
@@ -939,6 +1326,7 @@ export class FlowerArenaGame {
 
       petal.velocity.x *= drag
       petal.velocity.y *= drag
+      petal.velocity.y += dt * 5.5
       petal.position.x += petal.velocity.x * dt
       petal.position.y += petal.velocity.y * dt
       petal.rotation += petal.angularVelocity * dt
@@ -1711,7 +2099,18 @@ export class FlowerArenaGame {
           onCoverageUpdated: () => updateCoverageSignals(this.world),
         }, isBurnt, options)
       },
-      respawnUnit: (id) => this.respawnUnit(id),
+      respawnUnit: (id) => {
+        if (this.currentMode === "survivor") {
+          if (id === this.world.player.id) {
+            this.finishMatch()
+            return
+          }
+
+          this.respawnUnit(id)
+          return
+        }
+        this.respawnUnit(id)
+      },
       onKillPetalBurst: (x, y) => this.spawnKillPetalBurst(x, y),
       onUnitKilled: (target, isSuicide, killer) => {
         if (isSuicide || !killer) {
@@ -1719,9 +2118,10 @@ export class FlowerArenaGame {
         }
 
         killer.matchKills += 1
-        const spawnPerkDrop = killer.matchKills > 0 && killer.matchKills % 5 === 0
-        if (spawnPerkDrop) {
-          this.spawnPerkPickupDropAt(target.position.x, target.position.y, true)
+        if (this.currentMode === "survivor") {
+          if (!target.isPlayer && killer.isPlayer) {
+            this.spawnSurvivorXpDropAt(target.position.x, target.position.y, target.maxHp)
+          }
           return
         }
 
@@ -1766,6 +2166,7 @@ export class FlowerArenaGame {
 
   private update(frameDt: number, gameplayDt: number) {
     this.syncPlayerOptions()
+    this.resolveSurvivorLevelUpSelection()
 
     const effectDt = frameDt * EFFECT_SPEED
 
@@ -1799,14 +2200,36 @@ export class FlowerArenaGame {
       return
     }
 
+    if (this.isSurvivorLevelUpActive()) {
+      this.world.input.leftDown = false
+      this.world.input.rightDown = false
+      updateFlowers(this.world, effectDt)
+      updateDamagePopups(this.world, effectDt)
+      this.updateObstacleDebris(effectDt, fxCullBounds)
+      this.updateKillPetals(effectDt, fxCullBounds)
+      this.updateShellCasings(effectDt, fxCullBounds)
+      this.updateFlightTrails(effectDt, fxCullBounds)
+      this.cullHiddenDamagePopups(fxCullBounds)
+      this.updateExplosions(effectDt, fxCullBounds)
+      this.syncHudSignalsThrottled(frameDt)
+      return
+    }
+
     this.world.timeRemaining -= gameplayDt
     if (this.world.timeRemaining <= 0) {
       this.world.timeRemaining = 0
       this.finishMatch()
     }
 
-    const shrinkProgress = 1 - this.world.timeRemaining / MATCH_DURATION_SECONDS
-    this.world.arenaRadius = lerp(ARENA_START_RADIUS, ARENA_END_RADIUS, clamp(shrinkProgress, 0, 1))
+    const activeMatchDuration = this.currentMode === "survivor" ? SURVIVOR_MATCH_DURATION_SECONDS : MATCH_DURATION_SECONDS
+    const shrinkProgress = 1 - this.world.timeRemaining / activeMatchDuration
+    this.world.arenaRadius = this.currentMode === "survivor"
+      ? ARENA_START_RADIUS
+      : lerp(ARENA_START_RADIUS, ARENA_END_RADIUS, clamp(shrinkProgress, 0, 1))
+
+    if (this.currentMode === "survivor") {
+      this.updateSurvivorSwarmPressure(gameplayDt)
+    }
 
     updatePlayer(this.world, gameplayDt, {
       firePrimary: () => this.firePrimary(this.world.player.id),
@@ -1830,6 +2253,10 @@ export class FlowerArenaGame {
               ? t`Perk acquired ${localizedPerk} x${stacks}`
               : t`Perk acquired ${localizedPerk}`
           },
+          onPlayerXpPickup: (value) => {
+            this.sfx.itemAcquire()
+            this.grantSurvivorXp(value)
+          },
         })
       },
       updateCrosshairWorld: () => updateCrosshairWorld(this.world),
@@ -1839,12 +2266,34 @@ export class FlowerArenaGame {
       this.finishReload(this.world.player.id)
     }
 
+    if (this.currentMode === "survivor" && !this.isSurvivorLevelUpActive()) {
+      this.firePrimary(this.world.player.id)
+    }
+
     updateAI(this.world, gameplayDt, {
-      firePrimary: (botId) => this.firePrimary(botId),
-      continueBurst: (botId) => continueBurstFire(this.world, botId, this.primaryFireDeps()),
-      throwSecondary: (botId) => this.throwSecondary(botId),
+      firePrimary: (botId) => {
+        if (this.currentMode === "survivor") {
+          return
+        }
+        this.firePrimary(botId)
+      },
+      continueBurst: (botId) => {
+        if (this.currentMode === "survivor") {
+          return
+        }
+        continueBurstFire(this.world, botId, this.primaryFireDeps())
+      },
+      throwSecondary: (botId) => {
+        if (this.currentMode === "survivor") {
+          return
+        }
+        this.throwSecondary(botId)
+      },
       finishReload: (botId) => this.finishReload(botId),
       collectNearbyPickup: (botId) => {
+        if (this.currentMode === "survivor") {
+          return
+        }
         const bot = this.getUnit(botId)
         if (!bot) {
           return
@@ -1855,12 +2304,20 @@ export class FlowerArenaGame {
           perkStacks: (unit, perkId) => perkStacks(unit, perkId),
           onPlayerPickup: () => {},
           onPlayerPerkPickup: () => {},
+          onPlayerXpPickup: () => {},
         })
       },
       nowMs: () => performance.now(),
     })
 
     resolveUnitCollisions(this.world)
+    this.applySurvivorContactDamage(simDt)
+    if (this.currentMode === "survivor" && this.world.player.hp <= 0) {
+      this.world.player.hp = 0
+      this.finishMatch()
+      this.syncHudSignalsThrottled(frameDt)
+      return
+    }
     constrainUnitsToArena(this.world, simDt, {
       onArenaBoundaryDamage: (targetId, amount, sourceId, hitX, hitY, impactX, impactY) => {
         this.applyDamage(targetId, amount, sourceId, this.world.player.team, hitX, hitY, impactX, impactY, "arena")
@@ -1945,16 +2402,19 @@ export class FlowerArenaGame {
         return id === "pistol" ? "assault" : id
       },
       randomHighTierPrimary: () => this.randomHighTierPrimary(),
-      highTierChance: this.highTierLootBoxChance(),
+      highTierChance: this.currentMode === "survivor" ? 0 : this.highTierLootBoxChance(),
+      disableAutoSpawn: this.currentMode === "survivor",
       applyDamage: (targetId, amount, sourceId, sourceTeam, hitX, hitY, impactX, impactY) => {
         this.applyDamage(targetId, amount, sourceId, sourceTeam, hitX, hitY, impactX, impactY, "throwable")
       },
     })
 
-    this.world.lootBoxTimer -= simDt
-    if (this.world.lootBoxTimer <= 0) {
-      this.spawnRandomWhiteLootBox()
-      this.world.lootBoxTimer = this.whiteLootBoxSpawnIntervalSeconds()
+    if (this.currentMode !== "survivor") {
+      this.world.lootBoxTimer -= simDt
+      if (this.world.lootBoxTimer <= 0) {
+        this.spawnRandomWhiteLootBox()
+        this.world.lootBoxTimer = this.whiteLootBoxSpawnIntervalSeconds()
+      }
     }
 
     this.updateExplosions(effectDt, fxCullBounds)

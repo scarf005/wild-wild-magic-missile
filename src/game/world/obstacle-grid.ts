@@ -42,6 +42,9 @@ const materialForKind = (kind: MapObstacleBlueprint["kind"]) => {
   if (kind === "box") {
     return OBSTACLE_MATERIAL_BOX
   }
+  if (kind === "rock") {
+    return OBSTACLE_MATERIAL_ROCK
+  }
   if (kind === "high-tier-box") {
     return OBSTACLE_MATERIAL_BOX
   }

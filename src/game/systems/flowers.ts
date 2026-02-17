@@ -11,12 +11,13 @@ const FLOWER_LATERAL_JITTER = 0.03
 const FLOWER_PUSH_ATTEMPTS = 9
 const FLOWER_PUSH_DISTANCE_STEP = 0.34
 const FLOWER_TILE_CAPACITY = 18
-const FLOWER_SIZE_MIN = 0.16
-const FLOWER_SIZE_MAX = 0.42
+const FLOWER_SIZE_MIN = 0.14
+const FLOWER_SIZE_MAX = 0.34
 
 const FLOWER_AMOUNT_MIN = 10
 const FLOWER_AMOUNT_MAX = 20
 const FLOWER_AMOUNT_MULTIPLIER = 2
+const FLOWER_AMOUNT_SCALE = 0.2
 const FLOWER_DAMAGE_REFERENCE = 2.1
 const FLOWER_IMPACT_SPEED_REFERENCE = 40
 const FLOWER_COUNT_SCALE_MIN = 0.55
@@ -24,6 +25,8 @@ const FLOWER_COUNT_SCALE_MAX = 1.75
 const FLOWER_SIZE_SCALE_MIN = 0.6
 const FLOWER_SIZE_SCALE_MAX = 1.9
 const FLOWER_BLOOM_DURATION_SECONDS = 0.066
+const FLOWER_LIFETIME_MIN_SECONDS = 14
+const FLOWER_LIFETIME_MAX_SECONDS = 28
 const PLAYER_IMPACT_BLOOM_DELAYS = [0.05, 0.1, 0.15, 0.2, 0.25]
 
 export interface FlowerBurstProfile {
@@ -47,7 +50,7 @@ const toHex = (value: number) => {
   return Math.round(clamp(value, 0, 255)).toString(16).padStart(2, "0")
 }
 
-const pastelize = (hex: string, saturation = 0.62, lift = 0.22) => {
+const bloodify = (hex: string, darkness = 0.62, redBoost = 34) => {
   const cleaned = hex.replace("#", "")
   if (cleaned.length !== 6) {
     return hex
@@ -56,17 +59,11 @@ const pastelize = (hex: string, saturation = 0.62, lift = 0.22) => {
   const red = Number.parseInt(cleaned.slice(0, 2), 16)
   const green = Number.parseInt(cleaned.slice(2, 4), 16)
   const blue = Number.parseInt(cleaned.slice(4, 6), 16)
-  const gray = (red + green + blue) / 3
+  const heavyRed = red * darkness + redBoost
+  const heavyGreen = green * darkness * 0.34
+  const heavyBlue = blue * darkness * 0.26
 
-  const softRed = red * saturation + gray * (1 - saturation)
-  const softGreen = green * saturation + gray * (1 - saturation)
-  const softBlue = blue * saturation + gray * (1 - saturation)
-
-  const liftedRed = softRed + (255 - softRed) * lift
-  const liftedGreen = softGreen + (255 - softGreen) * lift
-  const liftedBlue = softBlue + (255 - softBlue) * lift
-
-  return `#${toHex(liftedRed)}${toHex(liftedGreen)}${toHex(liftedBlue)}`
+  return `#${toHex(heavyRed)}${toHex(heavyGreen)}${toHex(heavyBlue)}`
 }
 
 const shiftHex = (hex: string, offset: number) => {
@@ -89,11 +86,13 @@ const flowerPalette = (
   deps: FlowerSpawnDeps,
   isBurnt: boolean,
 ) => {
+  const isSurvivorMode = world.player.team === "arcanist"
+
   if (ownerId === deps.playerId) {
     return {
       team: "white" as const,
-      color: "#f2f6ff",
-      accent: "#d9e5ff",
+      color: isSurvivorMode ? "#7a0d0d" : "#9a1e1e",
+      accent: isSurvivorMode ? "#280505" : "#d84b35",
       fromPlayer: true,
     }
   }
@@ -112,8 +111,8 @@ const flowerPalette = (
     if (factionColor) {
       return {
         team: scoreOwnerId,
-        color: pastelize(factionColor, 0.86, 0.08),
-        accent: pastelize(factionColor, 0.76, 0.18),
+        color: isSurvivorMode ? bloodify(factionColor, 0.66, 42) : bloodify(factionColor, 0.82, 26),
+        accent: isSurvivorMode ? "#2a0505" : "#4b1613",
         fromPlayer: scoreOwnerId === deps.playerId,
       }
     }
@@ -124,8 +123,8 @@ const flowerPalette = (
   if (!Number.isInteger(botIndex) || botIndex <= 0) {
     return {
       team: "white" as const,
-      color: "#f0f0ea",
-      accent: "#d1d0cc",
+      color: isSurvivorMode ? "#500808" : "#5a1b1b",
+      accent: isSurvivorMode ? "#190303" : "#2f0f0f",
       fromPlayer: false,
     }
   }
@@ -133,8 +132,8 @@ const flowerPalette = (
   const palette = deps.botPalette(ownerId)
   return {
     team: "blue" as const,
-    color: pastelize(palette.tone, 0.9, 0.02),
-    accent: pastelize(palette.edge, 0.86, 0.01),
+    color: isSurvivorMode ? bloodify(palette.tone, 0.58, 46) : bloodify(palette.tone, 0.72, 30),
+    accent: isSurvivorMode ? "#180404" : "#2a0e0e",
     fromPlayer: false,
   }
 }
@@ -161,7 +160,7 @@ const seededRange = (seed: number, min: number, max: number) => {
   return min + seeded01(seed) * (max - min)
 }
 
-const FLOWER_COLOR_VARIANTS = [-14, -6, 4, 11]
+const FLOWER_COLOR_VARIANTS = [-28, -16, -7, 5]
 
 const flowerCellIndexAt = (world: WorldState, x: number, y: number) => {
   const size = world.terrainMap.size
@@ -226,6 +225,26 @@ const removeFlowerFromDensity = (world: WorldState, flower: WorldState["flowers"
   flower.bloomWeight = 1
   flower.prevInCell = -1
   flower.nextInCell = -1
+}
+
+const retireFlower = (world: WorldState, flower: WorldState["flowers"][number]) => {
+  if (!flower.active) {
+    return
+  }
+
+  const bucket = flowerScoreBucket(flower)
+  if (bucket in world.factionFlowerCounts) {
+    world.factionFlowerCounts[bucket] = Math.max(0, world.factionFlowerCounts[bucket] - 1)
+  }
+
+  removeFlowerFromDensity(world, flower)
+  flower.active = false
+  flower.size = 0
+  flower.targetSize = 0
+  flower.life = 0
+  flower.maxLife = 0
+  flower.alpha = 0
+  flower.renderDirty = false
 }
 
 const pickFlowerPosition = (
@@ -384,6 +403,9 @@ export const spawnFlowers = (
       : 0
     flower.pop = 0
     flower.size = 0
+    flower.maxLife = seededRange(flowerSeed + 8.77, FLOWER_LIFETIME_MIN_SECONDS, FLOWER_LIFETIME_MAX_SECONDS)
+    flower.life = flower.maxLife
+    flower.alpha = 1
 
     if (scoreOwnerId in world.factionFlowerCounts) {
       world.factionFlowerCounts[scoreOwnerId] += 1
@@ -414,12 +436,19 @@ export const updateFlowers = (world: WorldState, dt: number) => {
 
     if (flower.pop >= 1) {
       flower.size = flower.targetSize
-      continue
+    } else {
+      flower.pop = clamp(flower.pop + bloomStep, 0, 1)
+      const easedBloom = Math.pow(flower.pop, 0.16)
+      flower.size = flower.targetSize * easedBloom
     }
 
-    flower.pop = clamp(flower.pop + bloomStep, 0, 1)
-    const easedBloom = Math.pow(flower.pop, 0.16)
-    flower.size = flower.targetSize * easedBloom
+    if (flower.maxLife > 0) {
+      flower.life = Math.max(0, flower.life - dt)
+      flower.alpha = clamp(flower.life / flower.maxLife, 0, 1)
+      if (flower.life <= 0 || flower.alpha <= 0.001) {
+        retireFlower(world, flower)
+      }
+    }
   }
 }
 
@@ -441,7 +470,7 @@ export const randomFlowerBurst = (damage: number, impactSpeed: number): FlowerBu
   return {
     amount: Math.max(
       2,
-      Math.round(randomInt(FLOWER_AMOUNT_MIN, FLOWER_AMOUNT_MAX) * amountScale * FLOWER_AMOUNT_MULTIPLIER),
+      Math.round(randomInt(FLOWER_AMOUNT_MIN, FLOWER_AMOUNT_MAX) * amountScale * FLOWER_AMOUNT_MULTIPLIER * FLOWER_AMOUNT_SCALE),
     ),
     sizeScale,
   }

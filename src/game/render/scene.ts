@@ -241,6 +241,15 @@ const tintHex = (hex: string, multiplier: number, lift = 0) => {
   return `#${toHex(red * multiplier + lift)}${toHex(green * multiplier + lift)}${toHex(blue * multiplier + lift)}`
 }
 
+const hashKey = (value: string) => {
+  let hash = 2166136261
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return Math.abs(hash)
+}
+
 const paletteForUnit = (world: WorldState, unit: WorldState["units"][number]) => {
   const isFfa = world.player.team === world.player.id
   if (isFfa) {
@@ -505,23 +514,37 @@ const flowerSpriteForPalette = (color: string, accent: string) => {
   const [petalRed, petalGreen, petalBlue] = parseHexColor(color)
   const accentColor = accent === "#29261f" ? "#6d5e42" : accent
   const [accentRed, accentGreen, accentBlue] = parseHexColor(accentColor)
+  const splatterSeed = hashKey(key)
 
   for (let index = 0; index < pixels.length; index += 4) {
     const petalAlpha = flowerPetalMaskAlpha[index + 3]
-    if (petalAlpha > 0) {
-      pixels[index] = petalRed
-      pixels[index + 1] = petalGreen
-      pixels[index + 2] = petalBlue
-      pixels[index + 3] = petalAlpha
+    const accentAlpha = flowerAccentMaskAlpha[index + 3]
+    const maskAlpha = Math.max(petalAlpha * 0.95, accentAlpha)
+    if (maskAlpha <= 0) {
+      continue
     }
 
-    const accentAlpha = flowerAccentMaskAlpha[index + 3]
-    if (accentAlpha > 0) {
-      pixels[index] = accentRed
-      pixels[index + 1] = accentGreen
-      pixels[index + 2] = accentBlue
-      pixels[index + 3] = accentAlpha
+    const pixel = index / 4
+    const pixelX = pixel % FLOWER_SPRITE_PIXEL_SIZE
+    const pixelY = Math.floor(pixel / FLOWER_SPRITE_PIXEL_SIZE)
+    const grain = Math.sin(pixelX * 12.9898 + pixelY * 78.233 + splatterSeed * 0.0163) * 43758.5453123
+    const grain01 = grain - Math.floor(grain)
+    const drip = Math.sin(pixelX * 19.131 + pixelY * 3.711 + splatterSeed * 0.0091) * 25671.3511121
+    const drip01 = drip - Math.floor(drip)
+    const keepThreshold = 0.2 + (petalAlpha > 0 ? 0.5 : 0.24) + (accentAlpha > 0 ? 0.18 : 0)
+    if (grain01 > keepThreshold) {
+      continue
     }
+
+    const accentMix = accentAlpha > 0 ? 0.72 : 0.28
+    const darkMix = pixelY > FLOWER_SPRITE_PIXEL_SIZE * 0.56 && drip01 > 0.86 ? 0.44 : 0.18
+    const rawRed = petalRed * (1 - accentMix) + accentRed * accentMix
+    const rawGreen = petalGreen * (1 - accentMix) + accentGreen * accentMix
+    const rawBlue = petalBlue * (1 - accentMix) + accentBlue * accentMix
+    pixels[index] = clamp(rawRed * (1 - darkMix), 0, 255)
+    pixels[index + 1] = clamp(rawGreen * (0.8 - darkMix * 0.42), 0, 255)
+    pixels[index + 2] = clamp(rawBlue * (0.7 - darkMix * 0.54), 0, 255)
+    pixels[index + 3] = clamp(maskAlpha * (0.56 + grain01 * 0.6), 0, 255)
   }
 
   spriteContext.putImageData(imageData, 0, 0)
@@ -584,6 +607,7 @@ const drawFlowerToLayer = (
   layerContext: CanvasRenderingContext2D,
   mapSize: number,
   flower: WorldState["flowers"][number],
+  isSurvivorMode: boolean,
 ) => {
   const sprite = flowerSpriteForPalette(flower.color, flower.accent)
   if (!sprite) {
@@ -600,7 +624,7 @@ const drawFlowerToLayer = (
   const pixelsPerWorld = FLOWER_LAYER_PIXELS_PER_TILE
   const px = worldX * pixelsPerWorld
   const py = worldY * pixelsPerWorld
-  const sizeWorld = Math.max(0.12, flower.size * 1.8)
+  const sizeWorld = Math.max(0.14, flower.size * (isSurvivorMode ? 2.35 : 2.05))
   const sizePx = sizeWorld * pixelsPerWorld
   const drawX = px - sizePx * 0.5
   const drawY = py - sizePx * 0.5
@@ -626,7 +650,7 @@ const flushFlowerLayer = (world: WorldState) => {
       continue
     }
 
-    const drawn = drawFlowerToLayer(layer.context, layer.size, flower)
+    const drawn = drawFlowerToLayer(layer.context, layer.size, flower, world.player.team === "arcanist")
     if (!drawn) {
       continue
     }
@@ -802,6 +826,49 @@ const renderFlowers = (
   renderCameraX: number,
   renderCameraY: number,
 ) => {
+  const isSurvivorMode = world.player.team === "arcanist"
+
+  if (isSurvivorMode) {
+    for (const flower of world.flowers) {
+      if (!flower.active || flower.size <= 0.005) {
+        continue
+      }
+
+      const alpha = clamp(flower.alpha, 0, 1)
+      if (alpha <= 0.01) {
+        continue
+      }
+
+      const radius = Math.max(0.04, flower.size * 1.35)
+      const seed = hashKey(`${flower.slotIndex}:${flower.position.x.toFixed(2)}:${flower.position.y.toFixed(2)}`)
+
+      context.save()
+      context.globalAlpha = alpha * 0.86
+      context.fillStyle = flower.color
+      context.beginPath()
+      context.arc(flower.position.x, flower.position.y, radius, 0, Math.PI * 2)
+      context.fill()
+
+      context.fillStyle = flower.accent
+      for (let blob = 0; blob < 2; blob += 1) {
+        const angle = ((seed + blob * 173) % 360) * (Math.PI / 180)
+        const offset = radius * (0.35 + blob * 0.18)
+        const blobRadius = radius * (0.35 - blob * 0.08)
+        context.beginPath()
+        context.arc(
+          flower.position.x + Math.cos(angle) * offset,
+          flower.position.y + Math.sin(angle) * offset,
+          Math.max(0.015, blobRadius),
+          0,
+          Math.PI * 2,
+        )
+        context.fill()
+      }
+      context.restore()
+    }
+    return
+  }
+
   const renderedWithWebGl = renderFlowerInstances({
     context,
     world,
@@ -825,6 +892,10 @@ const renderFlowers = (
 }
 
 const pickupGlowColor = (pickup: WorldState["pickups"][number]) => {
+  if (pickup.kind === "xp") {
+    return "132, 215, 255"
+  }
+
   if (pickup.kind === "perk") {
     return "255, 118, 118"
   }
@@ -834,6 +905,32 @@ const pickupGlowColor = (pickup: WorldState["pickups"][number]) => {
   }
 
   return "255, 214, 104"
+}
+
+const drawXpCrystal = (context: CanvasRenderingContext2D, x: number, y: number, pulse: number) => {
+  const width = 0.2 + pulse * 0.06
+  const height = 0.34 + pulse * 0.08
+  context.save()
+  context.translate(x, y)
+  context.fillStyle = "#8be0ff"
+  context.beginPath()
+  context.moveTo(0, -height)
+  context.lineTo(width, -0.04)
+  context.lineTo(width * 0.62, height * 0.72)
+  context.lineTo(-width * 0.62, height * 0.72)
+  context.lineTo(-width, -0.04)
+  context.closePath()
+  context.fill()
+
+  context.fillStyle = "rgba(227, 250, 255, 0.8)"
+  context.beginPath()
+  context.moveTo(0, -height * 0.82)
+  context.lineTo(width * 0.35, -0.05)
+  context.lineTo(0, height * 0.54)
+  context.lineTo(-width * 0.35, -0.05)
+  context.closePath()
+  context.fill()
+  context.restore()
 }
 
 const hasVisiblePickups = (world: WorldState, fogCullBounds: FogCullBounds) => {
@@ -883,6 +980,11 @@ const renderPickups = (
     context.beginPath()
     context.ellipse(pickup.position.x, pickup.position.y + 0.55, 0.45, 0.2, 0, 0, Math.PI * 2)
     context.fill()
+
+    if (pickup.kind === "xp") {
+      drawXpCrystal(context, pickup.position.x, pickup.position.y + bobOffset, pulse)
+      continue
+    }
 
     const spriteId = pickup.kind === "perk" && pickup.perkId ? pickup.perkId : pickup.weapon
     drawItemPickupSprite(context, spriteId, pickup.position.x, pickup.position.y + bobOffset, 0.1)
@@ -1341,17 +1443,22 @@ const renderUnitStatusRings = (
 }
 
 const renderUnits = (context: CanvasRenderingContext2D, world: WorldState, fogCullBounds: FogCullBounds) => {
+  const isSurvivorMode = world.player.team === "arcanist"
   for (const unit of world.units) {
+    const isSurvivorSpider = isSurvivorMode && !unit.isPlayer && unit.team === "swarm"
+    const spiderScale = isSurvivorSpider ? 0.92 : 1
     const drawX = unit.position.x - unit.aim.x * unit.recoil * 0.32
     const drawY = unit.position.y - unit.aim.y * unit.recoil * 0.32
-    const body = unit.radius * 1.2
-    const ear = unit.radius * 0.42
+    const body = unit.radius * 1.2 * spiderScale
+    const ear = unit.radius * 0.42 * spiderScale
 
     if (!isInsideFogCullBounds(drawX, drawY, fogCullBounds, body * 2.8)) {
       continue
     }
 
-    renderUnitStatusRings(context, unit, drawX, drawY, body)
+    if (!isSurvivorSpider) {
+      renderUnitStatusRings(context, unit, drawX, drawY, body)
+    }
 
     const moveSpeed = Math.hypot(unit.velocity.x, unit.velocity.y)
     const skew = clamp(moveSpeed / 12, 0, 1)
@@ -1387,14 +1494,16 @@ const renderUnits = (context: CanvasRenderingContext2D, world: WorldState, fogCu
     context.fillStyle = tone
     context.fillRect(drawX - body * 0.68, drawY - body * 0.82, body * 1.36, body * 1.64)
 
-    const gunLength = unit.radius * 1.25 + unit.recoil * 0.24
-    const weaponAngle = Math.atan2(unit.aim.y, unit.aim.x)
-    const weaponScale = Math.max(0.09, unit.radius * 0.36)
-    context.save()
-    context.translate(drawX, drawY)
-    context.rotate(weaponAngle)
-    drawWeaponPickupSprite(context, unit.primaryWeapon, gunLength, 0, weaponScale)
-    context.restore()
+    if (!isSurvivorSpider) {
+      const gunLength = unit.radius * 1.25 + unit.recoil * 0.24
+      const weaponAngle = Math.atan2(unit.aim.y, unit.aim.x)
+      const weaponScale = Math.max(0.09, unit.radius * 0.36)
+      context.save()
+      context.translate(drawX, drawY)
+      context.rotate(weaponAngle)
+      drawWeaponPickupSprite(context, unit.primaryWeapon, gunLength, 0, weaponScale)
+      context.restore()
+    }
 
     if (unit.hitFlash > 0) {
       const flicker = 0.42 + Math.sin((1 - unit.hitFlash) * 42) * 0.38
@@ -1516,8 +1625,17 @@ const renderOffscreenEnemyIndicators = (
   context.textBaseline = "middle"
   context.font = "bold 11px monospace"
 
+  const isSurvivorMode = world.player.team === "arcanist"
+  const isBossEnemy = (enemy: WorldState["units"][number]) => enemy.maxHp >= 220
+
   for (const enemy of world.units) {
-    if (enemy.id === world.player.id) {
+    if (enemy.id === world.player.id || enemy.team === world.player.team) {
+      continue
+    }
+    if (!isBossEnemy(enemy)) {
+      continue
+    }
+    if (isSurvivorMode && enemy.team !== "swarm") {
       continue
     }
 

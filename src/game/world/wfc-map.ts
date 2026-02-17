@@ -9,7 +9,7 @@ export type TerrainTile =
   | "concrete"
 
 export interface MapObstacleBlueprint {
-  kind: "warehouse" | "wall" | "box" | "high-tier-box"
+  kind: "warehouse" | "wall" | "box" | "high-tier-box" | "rock"
   x: number
   y: number
   width: number
@@ -30,26 +30,28 @@ export interface TerrainMap {
 }
 
 const TILE_IDS: TerrainTile[] = [
-  "grass",
-  "clover",
-  "wild-grass",
+  "dirt",
+  "dirt-road",
+  "road-edge",
+  "gravel",
+  "concrete",
 ]
 
 const WEIGHTS: Record<TerrainTile, number> = {
-  grass: 36,
-  clover: 24,
-  "wild-grass": 18,
-  dirt: 8,
-  "dirt-road": 6,
-  "road-edge": 5,
-  gravel: 2,
-  concrete: 1,
+  grass: 0,
+  clover: 0,
+  "wild-grass": 0,
+  dirt: 38,
+  "dirt-road": 22,
+  "road-edge": 14,
+  gravel: 18,
+  concrete: 8,
 }
 
 const ALLOWED: Record<TerrainTile, TerrainTile[]> = {
-  grass: ["grass", "clover", "wild-grass", "dirt", "road-edge", "gravel"],
-  clover: ["grass", "clover", "wild-grass", "dirt", "road-edge"],
-  "wild-grass": ["grass", "clover", "wild-grass", "dirt", "road-edge", "gravel"],
+  grass: ["dirt", "dirt-road", "road-edge", "gravel", "concrete"],
+  clover: ["dirt", "dirt-road", "road-edge", "gravel", "concrete"],
+  "wild-grass": ["dirt", "dirt-road", "road-edge", "gravel", "concrete"],
   dirt: ["grass", "clover", "wild-grass", "dirt", "dirt-road", "road-edge", "gravel", "concrete"],
   "dirt-road": ["dirt", "dirt-road", "road-edge", "gravel", "concrete"],
   "road-edge": ["grass", "clover", "wild-grass", "dirt", "dirt-road", "road-edge", "gravel"],
@@ -243,7 +245,7 @@ const applyRoadNetwork = (tiles: TerrainTile[][]) => {
 
 const createWarehouseBlueprints = (size: number, paths: boolean[][]) => {
   const obstacles: MapObstacleBlueprint[] = []
-  const warehouseCount = randomInt(6, 10)
+  const warehouseCount = 0
 
   for (let attempt = 0; attempt < 700 && obstacles.length < warehouseCount; attempt += 1) {
     const width = randomInt(4, 8)
@@ -341,7 +343,7 @@ const createHighTierLootBoxBlueprints = (size: number, warehouses: MapObstacleBl
 
 const createRoadsideStructureBlueprints = (size: number, paths: boolean[][], blocked: MapObstacleBlueprint[]) => {
   const compounds: MapObstacleBlueprint[] = []
-  const structureCount = randomInt(8, 12)
+  const structureCount = 0
 
   for (let attempt = 0; attempt < 1200 && compounds.length < structureCount; attempt += 1) {
     const width = randomInt(5, 9)
@@ -426,7 +428,7 @@ const createRoadsideStructureBlueprints = (size: number, paths: boolean[][], blo
 
 const createWallBlueprints = (size: number, paths: boolean[][], blockedStructures: MapObstacleBlueprint[]) => {
   const walls: MapObstacleBlueprint[] = []
-  const wallCount = randomInt(150, 220)
+  const wallCount = 0
 
   for (let attempt = 0; attempt < 5200 && walls.length < wallCount; attempt += 1) {
     const centerX = randomInt(2, size - 3)
@@ -550,7 +552,7 @@ const createRockBlueprints = (size: number, paths: boolean[][], blocked: MapObst
     }
 
     const rock = {
-      kind: "box" as const,
+      kind: "rock" as const,
       x: gridToWorld(gridX, size),
       y: gridToWorld(gridY, size),
       width: 1,
@@ -574,43 +576,7 @@ const createRockBlueprints = (size: number, paths: boolean[][], blocked: MapObst
   return rocks
 }
 
-const createPickupSpawnPoints = (size: number, paths: boolean[][], obstacles: MapObstacleBlueprint[]) => {
-  const candidates: PickupSpawnPoint[] = []
-
-  for (let y = 3; y < size - 3; y += 1) {
-    for (let x = 3; x < size - 3; x += 1) {
-      if (!paths[y][x]) {
-        continue
-      }
-      if (Math.random() > 0.08) {
-        continue
-      }
-
-      const point = { x: gridToWorld(x, size), y: gridToWorld(y, size) }
-      const blocked = obstacles.some((obstacle) => rectsOverlap({ ...point, width: 0.8, height: 0.8 }, obstacle, 0.45))
-      if (!blocked) {
-        candidates.push(point)
-      }
-    }
-  }
-
-  const filtered: PickupSpawnPoint[] = []
-  for (const candidate of candidates) {
-    const tooClose = filtered.some((existing) => {
-      const dx = existing.x - candidate.x
-      const dy = existing.y - candidate.y
-      return dx * dx + dy * dy < 4.2 * 4.2
-    })
-    if (!tooClose) {
-      filtered.push(candidate)
-    }
-    if (filtered.length >= 12) {
-      break
-    }
-  }
-
-  return filtered
-}
+const createPickupSpawnPoints = (_size: number, _paths: boolean[][], _obstacles: MapObstacleBlueprint[]) => [] as PickupSpawnPoint[]
 
 const pickWeighted = (choices: TerrainTile[]) => {
   let total = 0
@@ -668,7 +634,7 @@ export const createBarrenGardenMap = (size: number) => {
         }
 
         if (neighborSet.size === 0) {
-          neighborSet.add("grass")
+          neighborSet.add("dirt")
         }
 
         if (neighborSet.size < before) {

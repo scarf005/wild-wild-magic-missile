@@ -226,6 +226,9 @@ export class Flower {
   targetSize = 4
   bloomDelay = 0
   pop = 0
+  life = 0
+  maxLife = 0
+  alpha = 1
 }
 
 export class KillPetal {
@@ -251,9 +254,10 @@ export class DamagePopup {
 
 export class Pickup {
   active = false
-  kind: "weapon" | "perk" = "weapon"
+  kind: "weapon" | "perk" | "xp" = "weapon"
   weapon: PrimaryWeaponId = "assault"
   perkId: PerkId | null = null
+  xpValue = 0
   highTier = false
   position = new Vec2()
   velocity = new Vec2()

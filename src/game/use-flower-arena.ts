@@ -1,19 +1,25 @@
 import type { RefObject } from "preact"
 import { useEffect } from "preact/hooks"
 
-import { FlowerArenaGame } from "./game.ts"
+import { createGameRuntime, type RuntimeModeId } from "./runtime.ts"
 
-export const useFlowerArena = (canvasRef: RefObject<HTMLCanvasElement>) => {
+export const useFlowerArena = (
+  canvasRef: RefObject<HTMLCanvasElement>,
+  mode: RuntimeModeId = "arena",
+) => {
   useEffect(() => {
     if (!canvasRef.current) {
       return
     }
 
-    const game = new FlowerArenaGame(canvasRef.current)
+    const game = createGameRuntime({
+      canvas: canvasRef.current,
+      mode,
+    })
     game.start()
 
     return () => {
       game.destroy()
     }
-  }, [canvasRef])
+  }, [canvasRef, mode])
 }

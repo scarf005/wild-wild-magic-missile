@@ -25,4 +25,4 @@ export type PerkId =
   | "extra_stamina"
   | "kevlar_vest"
 
-export type GameModeId = "ffa" | "tdm" | "duo" | "squad"
+export type GameModeId = "survivor" | "ffa" | "tdm" | "duo" | "squad"

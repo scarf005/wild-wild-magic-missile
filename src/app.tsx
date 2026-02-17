@@ -1,31 +1,24 @@
 import "./app.css"
 
-import { t } from "@lingui/core/macro"
-import { useEffect, useRef } from "preact/hooks"
+import { useRef } from "preact/hooks"
 
-import { GameHud } from "./game/hud.tsx"
-import { languageSignal } from "./game/signals.ts"
+import { SurvivorHud } from "./game/survivor-hud.tsx"
 import { useFlowerArena } from "./game/use-flower-arena.ts"
 
 export const App = () => {
   const canvasNode = useRef<HTMLCanvasElement>(null)
-  const locale = languageSignal.value
 
-  useFlowerArena(canvasNode)
-
-  useEffect(() => {
-    document.documentElement.lang = locale
-  }, [locale])
+  useFlowerArena(canvasNode, "survivor")
 
   return (
-    <main class="game-shell">
-      <div class="game-frame">
+    <main class="survivor-shell">
+      <div class="survivor-frame">
         <canvas
           ref={canvasNode}
-          class="arena-canvas"
-          aria-label={t`BadaBada arena`}
+          class="survivor-canvas"
+          aria-label="Wild Wild Magic Missile"
         />
-        <GameHud />
+        <SurvivorHud />
       </div>
     </main>
   )

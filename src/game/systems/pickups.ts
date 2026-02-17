@@ -52,10 +52,16 @@ export interface PickupDeps {
   randomHighTierPrimary?: () => PrimaryWeaponId
   highTierChance?: number
   force?: boolean
+  disableAutoSpawn?: boolean
 }
 
 export interface PerkPickupDeps {
   randomPerk: () => PerkId
+  force?: boolean
+}
+
+export interface XpPickupDeps {
+  value: number
   force?: boolean
 }
 
@@ -84,6 +90,7 @@ export const spawnPickupAt = (world: WorldState, position: { x: number; y: numbe
   slot.radius = 0.8
   slot.bob = randomRange(0, Math.PI * 2)
   slot.perkId = null
+  slot.xpValue = 0
   slot.velocity.set(0, 0)
   slot.throwOwnerId = ""
   slot.throwOwnerTeam = "white"
@@ -113,6 +120,33 @@ export const spawnPerkPickupAt = (world: WorldState, position: { x: number; y: n
   slot.throwOwnerId = ""
   slot.throwOwnerTeam = "white"
   slot.throwDamageArmed = false
+  slot.xpValue = 0
+}
+
+export const spawnXpPickupAt = (world: WorldState, position: { x: number; y: number }, deps: XpPickupDeps) => {
+  let slot = world.pickups.find((pickup) => !pickup.active)
+  if (!slot && deps.force) {
+    slot = new Pickup()
+    world.pickups.push(slot)
+  }
+
+  if (!slot) {
+    return
+  }
+
+  slot.active = true
+  slot.kind = "xp"
+  slot.position.set(position.x, position.y)
+  slot.perkId = null
+  slot.weapon = "assault"
+  slot.highTier = false
+  slot.radius = 0.55
+  slot.bob = randomRange(0, Math.PI * 2)
+  slot.velocity.set(0, 0)
+  slot.throwOwnerId = ""
+  slot.throwOwnerTeam = "white"
+  slot.throwDamageArmed = false
+  slot.xpValue = Math.max(1, Math.floor(deps.value))
 }
 
 export const spawnPickup = (world: WorldState, deps: PickupDeps) => {
@@ -207,7 +241,7 @@ export const updatePickups = (world: WorldState, dt: number, deps: PickupDeps & 
     pickup.bob += dt * 2.3
   }
 
-  if (world.pickupTimer <= 0) {
+  if (!deps.disableAutoSpawn && world.pickupTimer <= 0) {
     spawnPickup(world, deps)
     world.pickupTimer = randomRange(LOOT_PICKUP_INTERVAL_MIN_SECONDS, LOOT_PICKUP_INTERVAL_MAX_SECONDS)
   }
@@ -223,6 +257,7 @@ export interface CollectPickupDeps {
   perkStacks: (unit: Unit, perkId: PerkId) => number
   onPlayerPickup: (weaponId: PrimaryWeaponId) => void
   onPlayerPerkPickup: (perkId: PerkId, stacks: number) => void
+  onPlayerXpPickup: (value: number) => void
 }
 
 export const collectNearbyPickup = (world: WorldState, unit: Unit, deps: CollectPickupDeps) => {
@@ -265,6 +300,25 @@ export const collectNearbyPickup = (world: WorldState, unit: Unit, deps: Collect
       break
     }
 
+    if (pickup.kind === "xp") {
+      const value = Math.max(1, pickup.xpValue || 1)
+      pickup.active = false
+      pickup.highTier = false
+      pickup.velocity.set(0, 0)
+      pickup.throwOwnerId = ""
+      pickup.throwOwnerTeam = "white"
+      pickup.throwDamageArmed = false
+      pickup.kind = "weapon"
+      pickup.perkId = null
+      pickup.xpValue = 0
+
+      if (unit.isPlayer) {
+        deps.onPlayerXpPickup(value)
+      }
+
+      break
+    }
+
     const collectedWeapon = pickup.weapon
     const ejectedWeapon = deps.equipPrimary(unit, collectedWeapon, pickupAmmoForWeapon(collectedWeapon))
 
@@ -288,6 +342,7 @@ export const collectNearbyPickup = (world: WorldState, unit: Unit, deps: Collect
       pickup.throwOwnerTeam = unit.team
       pickup.throwDamageArmed = true
       pickup.bob = randomRange(0, Math.PI * 2)
+      pickup.xpValue = 0
     } else {
       pickup.active = false
       pickup.highTier = false
@@ -297,6 +352,7 @@ export const collectNearbyPickup = (world: WorldState, unit: Unit, deps: Collect
       pickup.throwDamageArmed = false
       pickup.kind = "weapon"
       pickup.perkId = null
+      pickup.xpValue = 0
     }
 
     if (unit.isPlayer) {

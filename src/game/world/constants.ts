@@ -13,7 +13,7 @@ export const PICKUP_POOL_SIZE = 12
 export const MOLOTOV_POOL_SIZE = 36
 export const OBSTACLE_POOL_SIZE = 220
 
-export const MAX_MATCH_PLAYERS = 12
+export const MAX_MATCH_PLAYERS = 72
 export const MATCH_DURATION_SECONDS = 90
 export const LOOT_PICKUP_INTERVAL_MIN_SECONDS = 8
 export const LOOT_PICKUP_INTERVAL_MAX_SECONDS = 12
